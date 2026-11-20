@@ -1,0 +1,1028 @@
+package com.example
+
+import android.Manifest
+import android.os.Build
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.credentials.CredentialManager
+import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import com.example.data.firebase.AuctionRepository
+import com.example.data.firebase.authStateFlow
+import com.example.data.firebase.onGoogleSignInClicked
+import com.example.data.firebase.signOutFromGoogle
+import com.example.data.local.AccountProfile
+import com.example.data.local.LocalCareerStore
+import com.example.data.local.LocalInternationalStore
+import com.example.data.local.LocalProfileStore
+import com.example.data.model.CareerMatchType
+import com.example.data.model.MatchStage
+import com.example.data.model.RoomStatus
+import com.example.notifications.CricBidNotificationManager
+import com.example.notifications.NotificationAlertEvaluator
+import com.example.ui.screens.CareerScreen
+import com.example.ui.screens.HomeLobbyScreen
+import com.example.ui.screens.InternationalScreen
+import com.example.ui.screens.LiveAuctionScreen
+import com.example.ui.screens.MatchHubScreen
+import com.example.ui.screens.MatchSimScreen
+import com.example.ui.screens.ProfileScreen
+import com.example.ui.screens.RetentionScreen
+import com.example.ui.screens.RoomLobbyScreen
+import com.example.ui.screens.SquadSelectionScreen
+import com.example.ui.screens.StandingsScreen
+import com.example.ui.screens.WelcomeScreen
+import com.example.ui.theme.CricBidTheme
+import com.example.ui.theme.NavyMidnight
+import com.example.ui.theme.TurfEmerald
+import com.example.viewmodel.CareerViewModel
+import com.example.viewmodel.CricBidViewModel
+import com.example.viewmodel.InternationalViewModel
+import com.example.viewmodel.MatchSimViewModel
+import com.google.firebase.Firebase
+import com.google.firebase.auth.auth
+import com.google.firebase.firestore.FirebaseFirestore
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        setContent {
+            CricBidTheme {
+                CricBidAppRoot()
+            }
+        }
+    }
+}
+
+@Composable
+fun CricBidAppRoot() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val profileStore = remember(context) { LocalProfileStore(context) }
+    val credentialManager = remember(context) { CredentialManager.create(context) }
+
+    val auth = Firebase.auth
+    val firebaseUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
+
+    var activeProfile by remember { mutableStateOf(profileStore.loadActiveProfile()) }
+    var savedUsernames by remember { mutableStateOf(profileStore.listSavedUsernames()) }
+    var enteredArena by rememberSaveable { mutableStateOf(false) }
+    var authErrorMessage by remember { mutableStateOf<String?>(null) }
+    var profileErrorMessage by remember { mutableStateOf<String?>(null) }
+    var cloudSignInLoading by remember { mutableStateOf(false) }
+    var cloudErrorMessage by remember { mutableStateOf<String?>(null) }
+
+    val triggerOptionalGoogleSignIn: () -> Unit = {
+        cloudErrorMessage = null
+        cloudSignInLoading = true
+        onGoogleSignInClicked(
+            context = context,
+            credentialManager = credentialManager,
+            onAuthSuccess = {
+                cloudSignInLoading = false
+                if (activeProfile == null) {
+                    val fallback = auth.currentUser?.displayName?.trim().orEmpty().ifBlank { "Manager" }
+                    activeProfile = profileStore.continueAsGuest(fallback)
+                }
+            },
+            onAuthError = { msg ->
+                cloudSignInLoading = false
+                cloudErrorMessage = msg
+            },
+            scope = scope,
+            onAuthCancelled = {
+                cloudSignInLoading = false
+            }
+        )
+    }
+
+    if (!enteredArena || activeProfile == null) {
+        WelcomeScreen(
+            activeProfile = activeProfile,
+            savedUsernames = savedUsernames,
+            isCloudConnected = firebaseUser != null,
+            cloudSignInLoading = cloudSignInLoading,
+            authErrorMessage = authErrorMessage,
+            cloudErrorMessage = cloudErrorMessage,
+            onContinueActiveProfile = {
+                authErrorMessage = null
+                if (activeProfile != null) enteredArena = true
+            },
+            onQuickGuestPlay = { username, avatarId ->
+                authErrorMessage = null
+                activeProfile = profileStore.continueAsGuest(username, avatarId)
+                savedUsernames = profileStore.listSavedUsernames()
+                enteredArena = true
+            },
+            onSignInWithPassword = { username, password ->
+                authErrorMessage = null
+                profileStore.signInWithPassword(username, password).fold(
+                    onSuccess = { loaded ->
+                        activeProfile = loaded
+                        savedUsernames = profileStore.listSavedUsernames()
+                        enteredArena = true
+                    },
+                    onFailure = { err -> authErrorMessage = err.message ?: "Sign in failed" }
+                )
+            },
+            onCreateAccount = { username, password, avatarId ->
+                authErrorMessage = null
+                profileStore.registerAccount(username, password, avatarId).fold(
+                    onSuccess = { created ->
+                        activeProfile = created
+                        savedUsernames = profileStore.listSavedUsernames()
+                        enteredArena = true
+                    },
+                    onFailure = { err -> authErrorMessage = err.message ?: "Could not create account" }
+                )
+            },
+            onRestoreBackupCode = { code, password ->
+                authErrorMessage = null
+                profileStore.importBackupCode(code, password).fold(
+                    onSuccess = { restored ->
+                        activeProfile = restored
+                        savedUsernames = profileStore.listSavedUsernames()
+                        enteredArena = true
+                    },
+                    onFailure = { err -> authErrorMessage = err.message ?: "Could not restore backup" }
+                )
+            },
+            onOptionalGoogleCloudSync = triggerOptionalGoogleSignIn
+        )
+    } else {
+        val currentProfile = activeProfile!!
+        val activeUid = firebaseUser?.uid ?: currentProfile.accountId
+        val isCloudConnected = firebaseUser != null
+        val sessionKey = if (isCloudConnected) "cloud_$activeUid" else "guest_${currentProfile.accountId}"
+
+        key(sessionKey) {
+            CricBidArenaFlow(
+                sessionKey = sessionKey,
+                currentUserId = activeUid,
+                profile = currentProfile,
+                backupCode = profileStore.exportBackupCode(currentProfile),
+                initialRecentRoomCodes = profileStore.loadRecentRoomCodes(),
+                onRememberRoomCode = { code -> profileStore.rememberRoomCode(code) },
+                profileErrorMessage = profileErrorMessage,
+                isCloudConnected = isCloudConnected,
+                onSaveProfile = { username, avatarId, favTeam, newPassword ->
+                    profileErrorMessage = null
+                    val result = profileStore.updateActiveProfile(
+                        newUsername = username,
+                        newAvatarId = avatarId,
+                        newFavoriteTeam = favTeam,
+                        newPassword = newPassword
+                    )
+                    result.fold(
+                        onSuccess = { updated ->
+                            activeProfile = updated
+                            savedUsernames = profileStore.listSavedUsernames()
+                            true
+                        },
+                        onFailure = { err ->
+                            profileErrorMessage = err.message ?: "Could not update profile"
+                            false
+                        }
+                    )
+                },
+                onRecordMatchOutcome = { won, wonTrophy ->
+                    profileStore.recordMatchOutcome(won = won, wonTrophy = wonTrophy)?.let { updated ->
+                        activeProfile = updated
+                    }
+                },
+                onSignOutToWelcome = {
+                    profileStore.signOutActiveSession()
+                    activeProfile = null
+                    profileErrorMessage = null
+                    authErrorMessage = null
+                    enteredArena = false
+                },
+                onConnectCloudSync = triggerOptionalGoogleSignIn,
+                onDisconnectCloudSync = {
+                    signOutFromGoogle(credentialManager, scope)
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun CricBidArenaFlow(
+    sessionKey: String,
+    currentUserId: String,
+    profile: AccountProfile,
+    backupCode: String,
+    initialRecentRoomCodes: List<String>,
+    onRememberRoomCode: (String) -> Unit,
+    profileErrorMessage: String?,
+    isCloudConnected: Boolean,
+    onSaveProfile: (username: String, avatarId: String, favoriteTeam: String, newPassword: String?) -> Boolean,
+    onRecordMatchOutcome: (won: Boolean, wonTrophy: Boolean) -> Unit,
+    onSignOutToWelcome: () -> Unit,
+    onConnectCloudSync: () -> Unit,
+    onDisconnectCloudSync: () -> Unit
+) {
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    val viewModel: CricBidViewModel = viewModel(
+        key = sessionKey,
+        factory = viewModelFactory {
+            initializer {
+                val app = checkNotNull(this[APPLICATION_KEY]) {
+                    "APPLICATION_KEY missing from CreationExtras"
+                }
+                val databaseId = app.getString(R.string.firestore_database_id)
+                val db = FirebaseFirestore.getInstance(databaseId)
+                val dataSource = AuctionRepository(
+                    db = db,
+                    activeActorId = currentUserId,
+                    initialRecentRoomCodes = initialRecentRoomCodes,
+                    onRememberRoomCode = onRememberRoomCode
+                )
+                CricBidViewModel(
+                    repository = dataSource,
+                    currentUserId = currentUserId,
+                    currentUserDisplayName = profile.username
+                )
+            }
+        }
+    )
+
+    val matchSimViewModel: MatchSimViewModel = viewModel(key = "match_sim_$sessionKey")
+    val internationalViewModel: InternationalViewModel = viewModel(
+        key = "intl_$sessionKey",
+        factory = viewModelFactory {
+            initializer {
+                val app = checkNotNull(this[APPLICATION_KEY]) {
+                    "APPLICATION_KEY missing from CreationExtras"
+                }
+                InternationalViewModel(
+                    store = LocalInternationalStore(app),
+                    currentUserId = currentUserId
+                )
+            }
+        }
+    )
+
+    val careerViewModel: CareerViewModel = viewModel(
+        key = "career_$sessionKey",
+        factory = viewModelFactory {
+            initializer {
+                val app = checkNotNull(this[APPLICATION_KEY]) {
+                    "APPLICATION_KEY missing from CreationExtras"
+                }
+                CareerViewModel(store = LocalCareerStore(app))
+            }
+        }
+    )
+
+    val context = LocalContext.current
+    val notificationManager = remember(context) { CricBidNotificationManager(context) }
+    var notificationPrefs by remember { mutableStateOf(notificationManager.loadPreferences()) }
+    var hasNotificationPermission by remember { mutableStateOf(notificationManager.hasNotificationPermission()) }
+    var promptedNotifOnce by rememberSaveable { mutableStateOf(false) }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasNotificationPermission = granted || notificationManager.hasNotificationPermission()
+        if (hasNotificationPermission) {
+            viewModel.showMessage("Local alerts enabled! You'll be alerted for auction turns & match kickoffs.")
+        } else {
+            viewModel.showMessage("Notifications denied. You can enable them anytime in Profile settings.")
+        }
+    }
+
+    val requestNotificationPermissionIfNeeded: () -> Unit = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !notificationManager.hasNotificationPermission()) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            hasNotificationPermission = notificationManager.hasNotificationPermission()
+        }
+    }
+
+    var lastObservedLotId by remember { mutableStateOf<String?>(null) }
+    var lastObservedHighestBidderTeamId by remember { mutableStateOf<String?>(null) }
+
+    var inInternationalHub by rememberSaveable { mutableStateOf(false) }
+    var inCareerMode by rememberSaveable { mutableStateOf(false) }
+    var inProfileScreen by rememberSaveable { mutableStateOf(false) }
+    var viewingStandingsMode by rememberSaveable { mutableStateOf<String?>(null) } // "IPL" or "INTERNATIONAL"
+    var activeMatchIsInternational by rememberSaveable { mutableStateOf(false) }
+    var activeCareerMatchType by rememberSaveable { mutableStateOf<CareerMatchType?>(null) }
+    var careerMatchRecordedKey by remember { mutableStateOf<String?>(null) }
+    var recordedMatchStatKeys by remember { mutableStateOf(emptySet<String>()) }
+
+    val myRoomsState by viewModel.myRoomsState.collectAsStateWithLifecycle()
+    val activeState by viewModel.activeState.collectAsStateWithLifecycle()
+    val matchSimState by matchSimViewModel.uiState.collectAsStateWithLifecycle()
+    val internationalState by internationalViewModel.uiState.collectAsStateWithLifecycle()
+    val careerState by careerViewModel.uiState.collectAsStateWithLifecycle()
+
+    // Request POST_NOTIFICATIONS cleanly once when user enters an active auction room on Android 13+
+    LaunchedEffect(activeState.activeRoomCode) {
+        if (activeState.activeRoomCode != null && !promptedNotifOnce && notificationPrefs.enabled) {
+            promptedNotifOnce = true
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !notificationManager.hasNotificationPermission()) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
+
+    // Trigger local notifications when user's auction turn starts (retention turn, new lot, or outbid)
+    LaunchedEffect(
+        activeState.room?.roomCode,
+        activeState.room?.status,
+        activeState.room?.currentPlayerIndex,
+        activeState.room?.highestBidderTeamId,
+        activeState.room?.currentBidLakhs
+    ) {
+        val room = activeState.room ?: return@LaunchedEffect
+        val alert = NotificationAlertEvaluator.evaluateAuctionTurnAlert(
+            room = room,
+            currentUserId = currentUserId,
+            previousHighestBidderTeamId = lastObservedHighestBidderTeamId,
+            previousLotId = lastObservedLotId
+        )
+        if (alert != null) {
+            notificationManager.postAlert(alert)
+        }
+        if (room.roomStatus == RoomStatus.AUCTION) {
+            lastObservedLotId = room.currentCricketer?.id
+            lastObservedHighestBidderTeamId = room.highestBidderTeamId
+        } else {
+            lastObservedLotId = null
+            lastObservedHighestBidderTeamId = null
+        }
+    }
+
+    // Trigger local notification when a match involving the user is ready in Match Hub
+    LaunchedEffect(activeState.room?.roomCode, activeState.room?.status, activeState.matches.size) {
+        val room = activeState.room ?: return@LaunchedEffect
+        val matchAlert = NotificationAlertEvaluator.evaluateUpcomingMatchAlert(
+            room = room,
+            matches = activeState.matches,
+            currentUserId = currentUserId
+        )
+        if (matchAlert != null) {
+            notificationManager.postAlert(matchAlert)
+        }
+    }
+
+    LaunchedEffect(activeState.snackbarMessage) {
+        val msg = activeState.snackbarMessage
+        if (!msg.isNullOrBlank()) {
+            snackbarHostState.showSnackbar(msg)
+            viewModel.clearSnackbar()
+        }
+    }
+
+    LaunchedEffect(matchSimState.statusNotice) {
+        val notice = matchSimState.statusNotice
+        if (!notice.isNullOrBlank()) {
+            snackbarHostState.showSnackbar(notice)
+            matchSimViewModel.clearStatusNotice()
+        }
+    }
+
+    LaunchedEffect(internationalState.snackbarMessage) {
+        val msg = internationalState.snackbarMessage
+        if (!msg.isNullOrBlank()) {
+            snackbarHostState.showSnackbar(msg)
+            internationalViewModel.clearSnackbar()
+        }
+    }
+
+    LaunchedEffect(careerState.snackbarMessage) {
+        val msg = careerState.snackbarMessage
+        if (!msg.isNullOrBlank()) {
+            snackbarHostState.showSnackbar(msg)
+            careerViewModel.clearSnackbar()
+        }
+    }
+
+    Scaffold(
+        containerColor = NavyMidnight,
+        contentWindowInsets = WindowInsets.safeDrawing,
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) }
+    ) { innerPadding ->
+        val contentModifier = Modifier
+            .fillMaxSize()
+            .padding(innerPadding)
+
+        val activeMatch = matchSimState.match
+        val activeRoom = activeState.room
+
+        when {
+            // 1. Live Career Mode Ball-by-Ball Match Simulation
+            activeMatch != null && activeCareerMatchType != null -> {
+                val careerMatchType = activeCareerMatchType!!
+                val onFinishCareerMatch: () -> Unit = {
+                    val m = matchSimViewModel.uiState.value.match
+                    if (m != null && m.finished) {
+                        val key = "career_${m.teamA.teamName}_${m.teamB.teamName}_${m.innings1.totalRuns}_${m.innings2.totalRuns}_${m.resultSummary}"
+                        if (careerMatchRecordedKey != key) {
+                            careerMatchRecordedKey = key
+                            careerViewModel.recordLiveMatchResult(m, careerMatchType)
+                            val won = m.winnerTeamId == "career_user_team"
+                            val wonTrophy = won && careerMatchType == CareerMatchType.WORLD_CUP
+                            onRecordMatchOutcome(won, wonTrophy)
+                        }
+                    }
+                }
+                LaunchedEffect(activeMatch.finished) {
+                    if (activeMatch.finished) onFinishCareerMatch()
+                }
+                MatchSimScreen(
+                    match = activeMatch,
+                    autoPlaying = matchSimState.autoPlaying,
+                    speed = matchSimState.speed,
+                    onBack = {
+                        matchSimViewModel.closeMatch()
+                        activeCareerMatchType = null
+                    },
+                    onNextBall = { matchSimViewModel.nextBall { onFinishCareerMatch() } },
+                    onNextOver = { matchSimViewModel.nextOver { onFinishCareerMatch() } },
+                    onNextFiveOvers = { matchSimViewModel.nextFiveOvers { onFinishCareerMatch() } },
+                    onSimInnings = { matchSimViewModel.simInnings { onFinishCareerMatch() } },
+                    onSimFullMatch = { matchSimViewModel.simFullMatch { onFinishCareerMatch() } },
+                    onToggleAutoPlay = { matchSimViewModel.toggleAutoPlay { onFinishCareerMatch() } },
+                    onCycleSpeed = { matchSimViewModel.cycleSpeed() },
+                    onApplyImpactSub = { teamId, benchId, outId ->
+                        matchSimViewModel.applyImpactSub(teamId, benchId, outId)
+                    },
+                    onSelectBowler = { bowlerId ->
+                        matchSimViewModel.selectBowlerForNextOver(bowlerId)
+                    },
+                    lastActionSnapshot = matchSimState.lastActionSnapshot,
+                    onPlayInteractiveBall = { input ->
+                        matchSimViewModel.playInteractiveBall(input) { onFinishCareerMatch() }
+                    },
+                    userTeamId = matchSimState.userTeamId,
+                    playFilter = matchSimState.playFilter,
+                    showPlayModeSetup = matchSimState.showPlayModeSetup,
+                    autoSimmingSkippedPhase = matchSimState.autoSimmingSkippedPhase,
+                    onConfirmPlayModeSetup = { filter ->
+                        matchSimViewModel.confirmPlayModeSetup(filter) { onFinishCareerMatch() }
+                    },
+                    onChangePlayFilter = { filter ->
+                        matchSimViewModel.setPlayFilter(filter) { onFinishCareerMatch() }
+                    },
+                    modifier = contentModifier
+                )
+            }
+
+            // 1A. Live International Ball-by-Ball Match Simulation (T20I / ODI / Test + Super Over + Bowler Rotation)
+            activeMatch != null && activeMatchIsInternational -> {
+                val onFinishInternational: () -> Unit = {
+                    matchSimViewModel.persistInternationalResultIfNeeded(
+                        currentUid = currentUserId,
+                        onSaveRecord = { rec ->
+                            internationalViewModel.recordMatchResult(rec)
+                            val statKey = "intl_${rec.teamAId}_${rec.teamBId}_${rec.teamAScore}_${rec.teamBScore}_${rec.resultSummary}"
+                            if (statKey !in recordedMatchStatKeys) {
+                                recordedMatchStatKeys = recordedMatchStatKeys + statKey
+                                val userNationId = internationalState.campaign.userNationId
+                                val won = rec.winnerTeamId == userNationId
+                                val wonTrophy = won && (rec.matchStage == MatchStage.FINAL || rec.matchStage == MatchStage.WTC_FINAL)
+                                onRecordMatchOutcome(won, wonTrophy)
+                            }
+                        }
+                    )
+                }
+                LaunchedEffect(activeMatch.finished) {
+                    if (activeMatch.finished) onFinishInternational()
+                }
+                MatchSimScreen(
+                    match = activeMatch,
+                    autoPlaying = matchSimState.autoPlaying,
+                    speed = matchSimState.speed,
+                    onBack = {
+                        matchSimViewModel.closeMatch()
+                        activeMatchIsInternational = false
+                    },
+                    onNextBall = { matchSimViewModel.nextBall { onFinishInternational() } },
+                    onNextOver = { matchSimViewModel.nextOver { onFinishInternational() } },
+                    onNextFiveOvers = { matchSimViewModel.nextFiveOvers { onFinishInternational() } },
+                    onSimInnings = { matchSimViewModel.simInnings { onFinishInternational() } },
+                    onSimFullMatch = { matchSimViewModel.simFullMatch { onFinishInternational() } },
+                    onToggleAutoPlay = { matchSimViewModel.toggleAutoPlay { onFinishInternational() } },
+                    onCycleSpeed = { matchSimViewModel.cycleSpeed() },
+                    onApplyImpactSub = { teamId, benchId, outId ->
+                        matchSimViewModel.applyImpactSub(teamId, benchId, outId)
+                    },
+                    onSelectBowler = { bowlerId ->
+                        matchSimViewModel.selectBowlerForNextOver(bowlerId)
+                    },
+                    lastActionSnapshot = matchSimState.lastActionSnapshot,
+                    onPlayInteractiveBall = { input ->
+                        matchSimViewModel.playInteractiveBall(input) { onFinishInternational() }
+                    },
+                    userTeamId = matchSimState.userTeamId,
+                    playFilter = matchSimState.playFilter,
+                    showPlayModeSetup = matchSimState.showPlayModeSetup,
+                    autoSimmingSkippedPhase = matchSimState.autoSimmingSkippedPhase,
+                    onConfirmPlayModeSetup = { filter ->
+                        matchSimViewModel.confirmPlayModeSetup(filter) { onFinishInternational() }
+                    },
+                    onChangePlayFilter = { filter ->
+                        matchSimViewModel.setPlayFilter(filter) { onFinishInternational() }
+                    },
+                    modifier = contentModifier
+                )
+            }
+
+            // 1B. Live Auction Room Ball-by-Ball Match Simulation (Pomp-Style + Impact Player + Super Over + Bowler Rotation)
+            activeMatch != null && activeRoom != null -> {
+                val onFinishPersist: () -> Unit = {
+                    matchSimViewModel.persistResultIfNeeded(
+                        room = activeRoom,
+                        currentUid = currentUserId,
+                        saveAction = { rec ->
+                            val res = viewModel.saveCompletedMatch(rec)
+                            val statKey = "room_${activeRoom.roomCode}_${rec.teamAId}_${rec.teamBId}_${rec.teamAScore}_${rec.teamBScore}"
+                            if (statKey !in recordedMatchStatKeys) {
+                                recordedMatchStatKeys = recordedMatchStatKeys + statKey
+                                val myTeamId = activeRoom.teamForUser(currentUserId)?.teamId
+                                if (myTeamId != null && (rec.teamAId == myTeamId || rec.teamBId == myTeamId)) {
+                                    val won = rec.winnerTeamId == myTeamId
+                                    val wonTrophy = won && rec.matchStage == MatchStage.FINAL
+                                    onRecordMatchOutcome(won, wonTrophy)
+                                }
+                            }
+                            res
+                        }
+                    )
+                }
+                LaunchedEffect(activeMatch.finished) {
+                    if (activeMatch.finished) onFinishPersist()
+                }
+                MatchSimScreen(
+                    match = activeMatch,
+                    autoPlaying = matchSimState.autoPlaying,
+                    speed = matchSimState.speed,
+                    onBack = { matchSimViewModel.closeMatch() },
+                    onNextBall = { matchSimViewModel.nextBall { onFinishPersist() } },
+                    onNextOver = { matchSimViewModel.nextOver { onFinishPersist() } },
+                    onNextFiveOvers = { matchSimViewModel.nextFiveOvers { onFinishPersist() } },
+                    onSimInnings = { matchSimViewModel.simInnings { onFinishPersist() } },
+                    onSimFullMatch = { matchSimViewModel.simFullMatch { onFinishPersist() } },
+                    onToggleAutoPlay = { matchSimViewModel.toggleAutoPlay { onFinishPersist() } },
+                    onCycleSpeed = { matchSimViewModel.cycleSpeed() },
+                    onApplyImpactSub = { teamId, benchId, outId ->
+                        matchSimViewModel.applyImpactSub(teamId, benchId, outId)
+                    },
+                    onSelectBowler = { bowlerId ->
+                        matchSimViewModel.selectBowlerForNextOver(bowlerId)
+                    },
+                    lastActionSnapshot = matchSimState.lastActionSnapshot,
+                    onPlayInteractiveBall = { input ->
+                        matchSimViewModel.playInteractiveBall(input) { onFinishPersist() }
+                    },
+                    userTeamId = matchSimState.userTeamId,
+                    playFilter = matchSimState.playFilter,
+                    showPlayModeSetup = matchSimState.showPlayModeSetup,
+                    autoSimmingSkippedPhase = matchSimState.autoSimmingSkippedPhase,
+                    onConfirmPlayModeSetup = { filter ->
+                        matchSimViewModel.confirmPlayModeSetup(filter) { onFinishPersist() }
+                    },
+                    onChangePlayFilter = { filter ->
+                        matchSimViewModel.setPlayFilter(filter) { onFinishPersist() }
+                    },
+                    modifier = contentModifier
+                )
+            }
+
+            // 2A. Manager Profile & Indian Player Avatars Screen
+            inProfileScreen -> {
+                ProfileScreen(
+                    profile = profile,
+                    backupCode = backupCode,
+                    isCloudConnected = isCloudConnected,
+                    errorMessage = profileErrorMessage,
+                    notificationPrefs = notificationPrefs,
+                    hasNotificationPermission = hasNotificationPermission,
+                    onUpdateNotificationPrefs = { updated ->
+                        notificationPrefs = updated
+                        notificationManager.savePreferences(updated)
+                    },
+                    onRequestNotificationPermission = requestNotificationPermissionIfNeeded,
+                    onSendTestNotification = {
+                        val sent = notificationManager.sendTestAlert()
+                        viewModel.showMessage(
+                            if (sent) "Test notification sent!" else "Enable notifications permission to preview alerts."
+                        )
+                    },
+                    onBack = { inProfileScreen = false },
+                    onSaveProfile = { newUsername, newAvatarId, newFavTeam, newPassword ->
+                        val ok = onSaveProfile(newUsername, newAvatarId, newFavTeam, newPassword)
+                        if (ok) {
+                            viewModel.showMessage("Profile saved! Avatar & credentials updated.")
+                        }
+                    },
+                    onCopyBackupCode = {
+                        viewModel.showMessage("Account Backup Code (CB1-...) copied! Keep it safe for reinstall recovery.")
+                    },
+                    onConnectCloudSync = onConnectCloudSync,
+                    onSignOutToWelcome = {
+                        viewModel.closeRoom()
+                        matchSimViewModel.closeMatch()
+                        inProfileScreen = false
+                        inInternationalHub = false
+                        inCareerMode = false
+                        viewingStandingsMode = null
+                        activeMatchIsInternational = false
+                        activeCareerMatchType = null
+                        onSignOutToWelcome()
+                    },
+                    modifier = contentModifier
+                )
+            }
+
+            // 2A-2. Dedicated Dynamic Tournament Standings Screen (IPL Room or International)
+            viewingStandingsMode == "IPL" && activeRoom != null -> {
+                val overview = remember(activeRoom.teams, activeState.matches) {
+                    com.example.engine.TournamentEngine.buildOverview(activeRoom.teams, activeState.matches)
+                }
+                val myTeamId = activeRoom.teamForUser(currentUserId)?.teamId
+                val matchesDone = if (overview.isSeriesMode) {
+                    overview.seriesSummary?.matchesPlayed ?: 0
+                } else {
+                    activeState.matches.count { it.matchStage == MatchStage.LEAGUE }
+                }
+                val totalScheduled = if (overview.isSeriesMode) 5 else overview.allLeagueFixtures.size
+                StandingsScreen(
+                    tournamentTitle = if (overview.isSeriesMode) "5-Match T20 Series" else "IPL League Table",
+                    tournamentSubtitle = "Room ${activeRoom.roomCode} • ${activeRoom.teams.size} Franchises",
+                    standings = overview.standings,
+                    teams = activeRoom.teams,
+                    matchesCompleted = matchesDone,
+                    totalScheduledMatches = totalScheduled,
+                    highlightTeamId = myTeamId,
+                    qualifierCount = if (!overview.isSeriesMode && activeRoom.teams.size >= 4) 4 else 0,
+                    winPoints = 2,
+                    tiePoints = 1,
+                    tieColumnLabel = "T",
+                    championTeamName = overview.championTeamName,
+                    onBack = { viewingStandingsMode = null },
+                    modifier = contentModifier
+                )
+            }
+
+            viewingStandingsMode == "INTERNATIONAL" && inInternationalHub -> {
+                val campaign = internationalState.campaign
+                val allNations = remember(campaign.userNationId) {
+                    com.example.data.model.InternationalNations.buildTeamStates(campaign.userNationId)
+                }
+                val isWorldCup = campaign.mode == com.example.data.model.InternationalMode.WORLD_CUP
+                if (isWorldCup) {
+                    val wcOverview = remember(campaign, allNations) {
+                        com.example.engine.InternationalTournamentEngine.buildWorldCupOverview(
+                            format = campaign.format,
+                            nations = allNations,
+                            matches = campaign.worldCupMatches
+                        )
+                    }
+                    val isTest = campaign.format == com.example.data.model.MatchFormat.TEST
+                    StandingsScreen(
+                        tournamentTitle = wcOverview.title,
+                        tournamentSubtitle = "${campaign.format.title} • 8 ICC Nations",
+                        standings = wcOverview.standings,
+                        teams = allNations,
+                        matchesCompleted = campaign.worldCupMatches.count { it.matchStage == MatchStage.LEAGUE },
+                        totalScheduledMatches = wcOverview.allGroupFixtures.size,
+                        highlightTeamId = campaign.userNationId,
+                        qualifierCount = wcOverview.qualifierCount,
+                        winPoints = if (isTest) 12 else 2,
+                        tiePoints = if (isTest) 4 else 1,
+                        tieColumnLabel = if (isTest) "D" else "T",
+                        championTeamName = wcOverview.championTeamName,
+                        onBack = { viewingStandingsMode = null },
+                        modifier = contentModifier
+                    )
+                } else {
+                    val userTeam = allNations.firstOrNull { it.teamId == campaign.userNationId } ?: allNations.first()
+                    val oppTeam = allNations.firstOrNull { it.teamId == campaign.opponentNationId }
+                        ?: allNations.first { it.teamId != userTeam.teamId }
+                    val seriesTeams = listOf(userTeam, oppTeam)
+                    val seriesSummary = remember(campaign, userTeam, oppTeam) {
+                        com.example.engine.InternationalTournamentEngine.buildCustomSeriesSummary(
+                            format = campaign.format,
+                            teamA = userTeam,
+                            teamB = oppTeam,
+                            totalMatches = campaign.seriesTotalMatches,
+                            matches = campaign.seriesMatches
+                        )
+                    }
+                    val seriesStandings = remember(campaign, seriesTeams) {
+                        com.example.engine.InternationalTournamentEngine.computeInternationalStandings(
+                            format = campaign.format,
+                            nations = seriesTeams,
+                            matches = campaign.seriesMatches
+                        )
+                    }
+                    val isTest = campaign.format == com.example.data.model.MatchFormat.TEST
+                    StandingsScreen(
+                        tournamentTitle = "${campaign.format.shortLabel} Bilateral Series",
+                        tournamentSubtitle = "${userTeam.teamName} vs ${oppTeam.teamName} (${campaign.seriesTotalMatches} Matches)",
+                        standings = seriesStandings,
+                        teams = seriesTeams,
+                        matchesCompleted = seriesSummary.matchesPlayed,
+                        totalScheduledMatches = campaign.seriesTotalMatches,
+                        highlightTeamId = campaign.userNationId,
+                        qualifierCount = 0,
+                        winPoints = if (isTest) 12 else 2,
+                        tiePoints = if (isTest) 4 else 1,
+                        tieColumnLabel = if (isTest) "D" else "T",
+                        championTeamName = seriesSummary.seriesWinnerName,
+                        onBack = { viewingStandingsMode = null },
+                        modifier = contentModifier
+                    )
+                }
+            }
+
+            // 2B. International Cricket Hub (T20I / ODI / Test • Series 1/3/5/7 & World Cup / WTC)
+            inInternationalHub -> {
+                InternationalScreen(
+                    campaign = internationalState.campaign,
+                    busy = internationalState.busy,
+                    onBack = {
+                        viewingStandingsMode = null
+                        inInternationalHub = false
+                    },
+                    onSelectFormat = { fmt -> internationalViewModel.selectFormat(fmt) },
+                    onSelectMode = { mode -> internationalViewModel.selectMode(mode) },
+                    onSelectUserNation = { id -> internationalViewModel.selectUserNation(id) },
+                    onSelectOpponentNation = { id -> internationalViewModel.selectOpponentNation(id) },
+                    onSelectSeriesLength = { count -> internationalViewModel.selectSeriesLength(count) },
+                    onStartMatch = { teamA, teamB, stage, format ->
+                        notificationManager.postAlert(
+                            NotificationAlertEvaluator.buildMatchKickoffAlert(
+                                teamAName = teamA.teamName,
+                                teamBName = teamB.teamName,
+                                stageLabel = stage.label,
+                                formatLabel = format.shortLabel,
+                                uniqueKey = "intl_${teamA.teamId}_${teamB.teamId}_${System.currentTimeMillis() / 10000}"
+                            )
+                        )
+                        activeMatchIsInternational = true
+                        matchSimViewModel.startNewMatch(
+                            teamA = teamA,
+                            teamB = teamB,
+                            stage = stage,
+                            format = format,
+                            userTeamId = internationalState.campaign.userNationId
+                        )
+                    },
+                    onQuickSimWorldCup = { fixtures -> internationalViewModel.quickSimWorldCupFixtures(fixtures) },
+                    onOpenStandings = { viewingStandingsMode = "INTERNATIONAL" },
+                    onResetCampaign = { internationalViewModel.resetCurrentModeCampaign() },
+                    modifier = contentModifier
+                )
+            }
+
+            // 2B-2. Single-Player Career Mode (Road to Legend + Hall of Fame)
+            inCareerMode -> {
+                CareerScreen(
+                    uiState = careerState,
+                    onBack = { inCareerMode = false },
+                    onCreateCareer = { name, age, nat, code, avId, role, batS, bowlS, diff ->
+                        careerViewModel.createRookieCareer(name, age, nat, code, avId, role, batS, bowlS, diff)
+                    },
+                    onChangeDifficulty = { diff -> careerViewModel.updateDifficulty(diff) },
+                    onRunDrill = { drill -> careerViewModel.runTrainingDrill(drill) },
+                    onEnterIplAuction = { careerViewModel.enterIplAuction() },
+                    onDismissAuctionDraft = { careerViewModel.dismissAuctionDraftSummary() },
+                    onAcceptIntlCallUp = { careerViewModel.acceptInternationalCallUp() },
+                    onPlayLiveMatch = { matchType ->
+                        val prepared = careerViewModel.prepareLiveMatch(matchType)
+                        if (prepared != null) {
+                            val (myTeam, oppTeam, oppOffset) = prepared
+                            notificationManager.postAlert(
+                                NotificationAlertEvaluator.buildMatchKickoffAlert(
+                                    teamAName = myTeam.teamName,
+                                    teamBName = oppTeam.teamName,
+                                    stageLabel = matchType.label,
+                                    formatLabel = matchType.format.shortLabel,
+                                    uniqueKey = "career_${myTeam.teamName}_${oppTeam.teamName}_${System.currentTimeMillis() / 10000}"
+                                )
+                            )
+                            careerMatchRecordedKey = null
+                            activeCareerMatchType = matchType
+                            activeMatchIsInternational = false
+                            matchSimViewModel.startNewMatch(
+                                teamA = myTeam,
+                                teamB = oppTeam,
+                                stage = matchType.stage,
+                                format = matchType.format,
+                                opponentRatingOffset = oppOffset,
+                                userTeamId = myTeam.teamId
+                            )
+                        }
+                    },
+                    onQuickSimMatch = { matchType -> careerViewModel.quickSimCareerMatch(matchType) },
+                    onRetireToHallOfFame = { careerViewModel.retireActiveCareerToHallOfFame() },
+                    onDismissRetirement = { careerViewModel.dismissRetirementSummary() },
+                    onToggleLegendInAuctions = { id, include -> careerViewModel.toggleLegendInAuctions(id, include) },
+                    modifier = contentModifier
+                )
+            }
+
+            // 2C. Home Room Creator / Joiner when no active room selected
+            activeState.activeRoomCode == null -> {
+                HomeLobbyScreen(
+                    profile = profile,
+                    isCloudConnected = isCloudConnected,
+                    roomsState = myRoomsState,
+                    busy = activeState.busy,
+                    joinStatusError = activeState.joinStatusError,
+                    joinStatusInfo = activeState.joinStatusInfo,
+                    onCreateRoom = { name -> viewModel.createRoom(name) },
+                    onJoinRoom = { code, name -> viewModel.joinRoom(code, name) },
+                    onOpenRoom = { code -> viewModel.openRoom(code) },
+                    onOpenInternational = { inInternationalHub = true },
+                    onOpenCareerMode = { inCareerMode = true },
+                    onOpenProfile = { inProfileScreen = true },
+                    onClearJoinStatus = { viewModel.clearJoinStatus() },
+                    onConnectCloudSync = onConnectCloudSync,
+                    onDisconnectCloudSync = {
+                        viewModel.closeRoom()
+                        matchSimViewModel.closeMatch()
+                        activeMatchIsInternational = false
+                        activeCareerMatchType = null
+                        inInternationalHub = false
+                        inCareerMode = false
+                        inProfileScreen = false
+                        onDisconnectCloudSync()
+                    },
+                    modifier = contentModifier
+                )
+            }
+
+            // 3. Loading active room snapshot
+            activeRoom == null -> {
+                Box(
+                    modifier = contentModifier.background(NavyMidnight),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(color = TurfEmerald)
+                }
+            }
+
+            // 4. Playing XI Selection (or Editing XI from Match Hub)
+            activeRoom.roomStatus == RoomStatus.SQUAD_SELECTION || activeState.editingXiOverride -> {
+                SquadSelectionScreen(
+                    room = activeRoom,
+                    currentUid = currentUserId,
+                    busy = activeState.busy,
+                    onBack = {
+                        if (activeState.editingXiOverride) {
+                            viewModel.setEditingXi(false)
+                        } else {
+                            viewModel.closeRoom()
+                        }
+                    },
+                    onSavePlayingXi = { ids, capId -> viewModel.saveMyPlayingXi(ids, capId) },
+                    onHostEnterMatchHub = { viewModel.enterMatchHubAsHost() },
+                    modifier = contentModifier
+                )
+            }
+
+            // 5. Waiting Room Lobby
+            activeRoom.roomStatus == RoomStatus.LOBBY -> {
+                RoomLobbyScreen(
+                    room = activeRoom,
+                    currentUid = currentUserId,
+                    isCloudConnected = isCloudConnected,
+                    busy = activeState.busy,
+                    onBack = { viewModel.closeRoom() },
+                    onCopyCode = { code -> viewModel.showMessage("Copied Room Code $code!") },
+                    onToggleAutoFillEightTeams = { enabled -> viewModel.toggleAutoFillEightTeams(enabled) },
+                    onAddAiBot = { viewModel.addAiBot() },
+                    onRemoveAiBot = { botId -> viewModel.removeAiBot(botId) },
+                    onStartAuction = { viewModel.enterRetentionRound() },
+                    modifier = contentModifier
+                )
+            }
+
+            // 6. Marquee Retention Round
+            activeRoom.roomStatus == RoomStatus.RETENTION -> {
+                RetentionScreen(
+                    room = activeRoom,
+                    currentUid = currentUserId,
+                    busy = activeState.busy,
+                    onBack = { viewModel.closeRoom() },
+                    onRetainPlayer = { playerId -> viewModel.retainMarqueePlayer(playerId) },
+                    onSkipRetention = { viewModel.skipMarqueeRetention() },
+                    onHostLaunchAuction = { viewModel.beginLiveAuctionFromRetention() },
+                    modifier = contentModifier
+                )
+            }
+
+            // 7. Live Auction Arena (10s Timer + Right to Match Card + Smart AI Fallback)
+            activeRoom.roomStatus == RoomStatus.AUCTION -> {
+                LiveAuctionScreen(
+                    room = activeRoom,
+                    currentUid = currentUserId,
+                    countdownSeconds = activeState.countdownSeconds,
+                    countdownProgress = activeState.countdownProgress,
+                    busy = activeState.busy,
+                    onBack = { viewModel.closeRoom() },
+                    onPlaceBid = { viewModel.placeMyBid() },
+                    onUseRtm = { viewModel.useMyRtmCard() },
+                    onHammerNow = { viewModel.hammerCurrentLotNow() },
+                    onFastForward = { viewModel.fastForwardAuction() },
+                    modifier = contentModifier
+                )
+            }
+
+            // 8. Dynamic Tournament Hub (5-Match Series OR League + NRR + IPL Playoffs)
+            else -> {
+                MatchHubScreen(
+                    room = activeRoom,
+                    currentUid = currentUserId,
+                    matches = activeState.matches,
+                    busy = activeState.busy,
+                    onBack = {
+                        viewingStandingsMode = null
+                        viewModel.closeRoom()
+                    },
+                    onEditMyXi = { viewModel.setEditingXi(true) },
+                    onOpenStandings = { viewingStandingsMode = "IPL" },
+                    onStartMatch = { teamA, teamB, stage ->
+                        val myTeam = activeRoom.teamForUser(currentUserId)
+                        val myActiveTeam = when (myTeam?.teamId) {
+                            teamA.teamId -> teamA
+                            teamB.teamId -> teamB
+                            else -> null
+                        }
+                        if (myActiveTeam != null) {
+                            val check = com.example.data.model.SquadRuleValidator.validatePlayingXi(
+                                selectedIds = myActiveTeam.playingXiIds,
+                                ownedIds = myActiveTeam.squadPlayerIds,
+                                captainPlayerId = myActiveTeam.effectiveCaptainId
+                            )
+                            if (!check.allowed) {
+                                viewModel.showMessage(
+                                    check.reason ?: "Max 4 overseas players allowed in Playing XI. Update your XI before starting."
+                                )
+                                viewModel.setEditingXi(true)
+                                return@MatchHubScreen
+                            }
+                        }
+                        if (myActiveTeam != null) {
+                            notificationManager.postAlert(
+                                NotificationAlertEvaluator.buildMatchKickoffAlert(
+                                    teamAName = teamA.teamName,
+                                    teamBName = teamB.teamName,
+                                    stageLabel = stage.label,
+                                    formatLabel = "T20",
+                                    uniqueKey = "ipl_${activeRoom.roomCode}_${teamA.teamId}_${teamB.teamId}_${System.currentTimeMillis() / 10000}"
+                                )
+                            )
+                        }
+                        activeMatchIsInternational = false
+                        matchSimViewModel.startNewMatch(
+                            teamA = teamA,
+                            teamB = teamB,
+                            stage = stage,
+                            userTeamId = myActiveTeam?.teamId ?: activeRoom.teamForUser(currentUserId)?.teamId
+                        )
+                    },
+                    onQuickSimLeague = { fixtures -> viewModel.quickSimLeagueMatches(fixtures) },
+                    modifier = contentModifier
+                )
+            }
+        }
+    }
+}

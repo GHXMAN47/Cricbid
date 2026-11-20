@@ -1,0 +1,160 @@
+name: Build Debug APK
+
+on:
+  push:
+    branches:
+      - "**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Build and Publish Debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Verify active Java version
+        run: |
+          java -version
+          javac -version
+
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+
+      - name: Verify Gradle version
+        run: gradle --version
+
+      - name: Create temporary debug keystore
+        run: |
+          rm -f debug.keystore
+          keytool -genkeypair \
+            -keystore debug.keystore \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+          test -f debug.keystore
+
+      - name: Build Debug APK
+        run: gradle :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Verify Debug APK and prepare release metadata
+        id: apk_meta
+        run: |
+          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -f "$APK_PATH" ]; then
+            echo "::error::Expected APK not found at $APK_PATH"
+            exit 1
+          fi
+
+          RELEASE_TAG="apk-run-${GITHUB_RUN_NUMBER}-attempt-${GITHUB_RUN_ATTEMPT}"
+          RELEASE_TITLE="Debug APK (Run #${GITHUB_RUN_NUMBER}, Attempt ${GITHUB_RUN_ATTEMPT})"
+          RELEASE_ASSET_NAME="app-debug-run-${GITHUB_RUN_NUMBER}-attempt-${GITHUB_RUN_ATTEMPT}.apk"
+          STAGED_APK_PATH="${RUNNER_TEMP}/${RELEASE_ASSET_NAME}"
+
+          cp "$APK_PATH" "$STAGED_APK_PATH"
+
+          echo "apk_path=${APK_PATH}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "release_title=${RELEASE_TITLE}" >> "$GITHUB_OUTPUT"
+          echo "release_asset_name=${RELEASE_ASSET_NAME}" >> "$GITHUB_OUTPUT"
+          echo "staged_apk_path=${STAGED_APK_PATH}" >> "$GITHUB_OUTPUT"
+
+          ls -lh "$APK_PATH" "$STAGED_APK_PATH"
+
+      - name: Upload Debug APK Actions artifact
+        id: upload_apk
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Publish GitHub Release with APK
+        id: publish_release
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.apk_meta.outputs.release_tag }}
+          RELEASE_TITLE: ${{ steps.apk_meta.outputs.release_title }}
+          RELEASE_ASSET_NAME: ${{ steps.apk_meta.outputs.release_asset_name }}
+          STAGED_APK_PATH: ${{ steps.apk_meta.outputs.staged_apk_path }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            "${STAGED_APK_PATH}#${RELEASE_ASSET_NAME}" \
+            --target "$GITHUB_SHA" \
+            --title "$RELEASE_TITLE" \
+            --notes "Automated Debug APK build for commit \`${GITHUB_SHA}\` (Run #${GITHUB_RUN_NUMBER}, Attempt ${GITHUB_RUN_ATTEMPT}). Download the \`.apk\` file directly from the **Assets** section below." \
+            --latest
+
+      - name: Report APK download result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPLOAD_OUTCOME: ${{ steps.upload_apk.outcome }}
+          PUBLISH_OUTCOME: ${{ steps.publish_release.outcome }}
+          RELEASE_TAG: ${{ steps.apk_meta.outputs.release_tag }}
+          RELEASE_TITLE: ${{ steps.apk_meta.outputs.release_title }}
+          RELEASE_ASSET_NAME: ${{ steps.apk_meta.outputs.release_asset_name }}
+        run: |
+          if [ "$UPLOAD_OUTCOME" != "success" ]; then
+            echo "::warning::APK build or Actions artifact upload did not complete before release reporting."
+            exit 0
+          fi
+
+          if [ "$PUBLISH_OUTCOME" = "success" ]; then
+            echo "Confirming published GitHub Release via gh release view..."
+            gh release view "$RELEASE_TAG"
+
+            RELEASE_URL="$(gh release view "$RELEASE_TAG" --json url -q .url)"
+
+            echo "Release Tag: ${RELEASE_TAG}"
+            echo "Release Title: ${RELEASE_TITLE}"
+            echo "Release URL: ${RELEASE_URL}"
+            echo "APK Asset Filename: ${RELEASE_ASSET_NAME}"
+
+            {
+              echo "## Debug APK Build & Release Summary"
+              echo ""
+              echo "- **APK Build:** Succeeded (\`app/build/outputs/apk/debug/app-debug.apk\`)"
+              echo "- **Release Publishing:** Succeeded"
+              echo "- **Release Tag:** \`${RELEASE_TAG}\`"
+              echo "- **Release Title:** ${RELEASE_TITLE}"
+              echo "- **APK Asset Filename:** \`${RELEASE_ASSET_NAME}\`"
+              echo "- **GitHub Release Page:** ${RELEASE_URL}"
+              echo ""
+              echo "Download the APK directly from the **Assets** section on the GitHub Release page above."
+              echo ""
+              echo "Backup: The standard GitHub Actions artifact named \`app-debug-apk\` is also available in this workflow run."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::GitHub Release publishing failed, but the Debug APK build succeeded and the Actions artifact 'app-debug-apk' remains available for download."
+            echo "APK build succeeded."
+            echo "Actions artifact 'app-debug-apk' remains available as a backup download in this workflow run."
+
+            {
+              echo "## Debug APK Build & Release Summary"
+              echo ""
+              echo "> **Warning:** GitHub Release publishing failed for tag \`${RELEASE_TAG}\`."
+              echo ""
+              echo "- **APK Build:** Succeeded (\`app/build/outputs/apk/debug/app-debug.apk\`)"
+              echo "- **Actions Artifact Backup:** Available as \`app-debug-apk\` under this workflow run's Artifacts section."
+              echo "- **Release Publishing:** Failed (no release URL generated)."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

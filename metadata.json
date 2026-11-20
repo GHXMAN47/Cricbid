@@ -1,0 +1,6 @@
+{
+  "name": "CricBid",
+  "description": "Real-time multiplayer Cricket Auction and T20 Match Simulation with AI bot managers, live bidding, squad rules, and ball-by-ball scorecards.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

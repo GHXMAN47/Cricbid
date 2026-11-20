@@ -1,0 +1,271 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- GLOBAL HARDENED HELPERS ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidRoomCode(code) {
+      return code is string && code.size() == 4 && code.matches('^[0-9]{4}$');
+    }
+
+    // Guest player IDs are auto-generated locally (guest_..., acct_..., local_...) so players
+    // can host and join 4-digit multiplayer rooms across devices without mandatory sign-in.
+    function isGuestActorId(id) {
+      return id is string && id.matches('^(guest|acct|local)_[a-zA-Z0-9]{6,24}$');
+    }
+
+    function isAuthorizedActor(id) {
+      return (isSignedIn() && id == request.auth.uid) || (!isSignedIn() && isGuestActorId(id));
+    }
+
+    // --- ENTITY VALIDATION HELPERS ---
+    function isValidUserProfile(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60 &&
+             (!('favoriteTeamName' in data) || (data.favoriteTeamName is string && data.favoriteTeamName.size() <= 40)) &&
+             data.matchesPlayed is int && data.matchesPlayed >= 0 && data.matchesPlayed <= 100000 &&
+             data.matchesWon is int && data.matchesWon >= 0 && data.matchesWon <= data.matchesPlayed &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidRoom(data) {
+      return isValidRoomCode(data.roomCode) &&
+             data.hostUid is string && data.hostUid.size() >= 1 && data.hostUid.size() <= 128 &&
+             data.memberUids is list && data.memberUids.size() >= 1 && data.memberUids.size() <= 8 &&
+             data.memberUids[0] is string &&
+             data.status in ['LOBBY', 'RETENTION', 'AUCTION', 'SQUAD_SELECTION', 'MATCH_HUB', 'COMPLETED'] &&
+             (!('autoFillEightTeams' in data) || data.autoFillEightTeams is bool) &&
+             data.teams is list && data.teams.size() >= 1 && data.teams.size() <= 8 &&
+             data.teams[0] is map &&
+             data.auctionOrder is list && data.auctionOrder.size() >= 1 && data.auctionOrder.size() <= 120 &&
+             data.auctionOrder[0] is string &&
+             data.currentPlayerIndex is int && data.currentPlayerIndex >= 0 && data.currentPlayerIndex <= 120 &&
+             data.currentBidLakhs is int && data.currentBidLakhs >= 0 && data.currentBidLakhs <= 10000 &&
+             data.highestBidderTeamId is string && data.highestBidderTeamId.size() <= 64 &&
+             data.highestBidderName is string && data.highestBidderName.size() <= 50 &&
+             data.bidDeadlineEpochMs is int && data.bidDeadlineEpochMs >= 0 &&
+             data.bidCount is int && data.bidCount >= 0 && data.bidCount <= 1000 &&
+             data.soldCount is int && data.soldCount >= 0 && data.soldCount <= 120 &&
+             data.unsoldCount is int && data.unsoldCount >= 0 && data.unsoldCount <= 120 &&
+             data.lastEventMessage is string && data.lastEventMessage.size() <= 240 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidMatchRecord(data) {
+      return isValidRoomCode(data.roomCode) &&
+             data.hostUid is string && data.hostUid.size() >= 1 && data.hostUid.size() <= 128 &&
+             data.memberUids is list && data.memberUids.size() >= 1 && data.memberUids.size() <= 8 &&
+             data.memberUids[0] is string &&
+             data.stage in ['SERIES', 'LEAGUE', 'QUALIFIER_1', 'ELIMINATOR', 'QUALIFIER_2', 'FINAL'] &&
+             data.teamAId is string && data.teamAId.size() >= 1 && data.teamAId.size() <= 64 &&
+             data.teamAName is string && data.teamAName.size() >= 1 && data.teamAName.size() <= 50 &&
+             data.teamBId is string && data.teamBId.size() >= 1 && data.teamBId.size() <= 64 &&
+             data.teamBName is string && data.teamBName.size() >= 1 && data.teamBName.size() <= 50 &&
+             data.teamAScore is int && data.teamAScore >= 0 && data.teamAScore <= 500 &&
+             data.teamAWickets is int && data.teamAWickets >= 0 && data.teamAWickets <= 10 &&
+             data.teamAOvers is string && data.teamAOvers.size() >= 1 && data.teamAOvers.size() <= 10 &&
+             data.teamABalls is int && data.teamABalls >= 0 && data.teamABalls <= 120 &&
+             data.teamBScore is int && data.teamBScore >= 0 && data.teamBScore <= 500 &&
+             data.teamBWickets is int && data.teamBWickets >= 0 && data.teamBWickets <= 10 &&
+             data.teamBOvers is string && data.teamBOvers.size() >= 1 && data.teamBOvers.size() <= 10 &&
+             data.teamBBalls is int && data.teamBBalls >= 0 && data.teamBBalls <= 120 &&
+             data.winnerTeamId is string && data.winnerTeamId.size() >= 1 && data.winnerTeamId.size() <= 64 &&
+             data.winnerTeamName is string && data.winnerTeamName.size() >= 1 && data.winnerTeamName.size() <= 60 &&
+             data.resultSummary is string && data.resultSummary.size() >= 1 && data.resultSummary.size() <= 200 &&
+             data.playerOfTheMatch is string && data.playerOfTheMatch.size() >= 1 && data.playerOfTheMatch.size() <= 120 &&
+             data.innings1Worm is list && data.innings1Worm.size() <= 20 &&
+             (data.innings1Worm.size() == 0 || data.innings1Worm[0] is int) &&
+             data.innings2Worm is list && data.innings2Worm.size() <= 20 &&
+             (data.innings2Worm.size() == 0 || data.innings2Worm[0] is int) &&
+             data.status == 'COMPLETED' &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    // --- 1. USERS COLLECTION (Strictly Authenticated Optional Cloud Profile) ---
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+      allow list: if isSignedIn() && request.auth.uid == userId;
+
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().keys().hasAll(['userId', 'displayName', 'matchesPlayed', 'matchesWon', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'displayName', 'favoriteTeamName', 'matchesPlayed', 'matchesWon', 'createdAt', 'updatedAt']) &&
+                       isValidUserProfile(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isValidUserProfile(incoming()) &&
+                       request.auth.uid == userId &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'favoriteTeamName', 'matchesPlayed', 'matchesWon', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+    }
+
+    // --- 2. MULTIPLAYER AUCTION ROOMS (Supports Both Guest & Signed-In Cross-Device Play) ---
+    match /rooms/{roomId} {
+      // Single-document lookup by exact 4-digit room code (no collection scraping!)
+      allow get: if isValidRoomCode(roomId);
+
+      // Collection-wide list strictly requires authentication and membership
+      allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+
+      allow create: if isValidRoomCode(roomId) &&
+                       incoming().roomCode == roomId &&
+                       isAuthorizedActor(incoming().hostUid) &&
+                       incoming().hostUid in incoming().memberUids &&
+                       incoming().memberUids.size() == 1 &&
+                       incoming().status == 'LOBBY' &&
+                       incoming().keys().hasAll([
+                         'roomCode', 'hostUid', 'memberUids', 'status', 'autoFillEightTeams', 'teams',
+                         'auctionOrder', 'currentPlayerIndex', 'currentBidLakhs',
+                         'highestBidderTeamId', 'highestBidderName', 'bidDeadlineEpochMs',
+                         'bidCount', 'soldCount', 'unsoldCount', 'lastEventMessage',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'roomCode', 'hostUid', 'memberUids', 'status', 'autoFillEightTeams', 'teams',
+                         'auctionOrder', 'currentPlayerIndex', 'currentBidLakhs',
+                         'highestBidderTeamId', 'highestBidderName', 'bidDeadlineEpochMs',
+                         'bidCount', 'soldCount', 'unsoldCount', 'lastEventMessage',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidRoom(incoming());
+
+      allow update: if isValidRoomCode(roomId) &&
+                       isValidRoom(incoming()) &&
+                       existing().status != 'COMPLETED' &&
+                       incoming().roomCode == existing().roomCode &&
+                       incoming().hostUid == existing().hostUid &&
+                       incoming().createdAt == existing().createdAt && (
+                         // Action 1: New player (Guest or Signed-In) joins an open LOBBY with 4-digit code
+                         (
+                           existing().status == 'LOBBY' &&
+                           incoming().status == 'LOBBY' &&
+                           (!isSignedIn() || (!(request.auth.uid in existing().memberUids) && request.auth.uid in incoming().memberUids)) &&
+                           incoming().memberUids.size() == existing().memberUids.size() + 1 &&
+                           incoming().teams.size() == existing().teams.size() + 1 &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'teams', 'lastEventMessage', 'updatedAt'])
+                         ) ||
+                         // Action 2: Room member picks/skips Marquee Retention during RETENTION
+                         (
+                           existing().status == 'RETENTION' &&
+                           incoming().status == 'RETENTION' &&
+                           (!isSignedIn() || request.auth.uid in existing().memberUids) &&
+                           incoming().teams.size() == existing().teams.size() &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['teams', 'auctionOrder', 'soldCount', 'lastEventMessage', 'updatedAt'])
+                         ) ||
+                         // Action 3: Room member places a live bid during AUCTION
+                         (
+                           existing().status == 'AUCTION' &&
+                           incoming().status == 'AUCTION' &&
+                           (!isSignedIn() || request.auth.uid in existing().memberUids) &&
+                           incoming().currentPlayerIndex == existing().currentPlayerIndex &&
+                           incoming().currentBidLakhs > existing().currentBidLakhs &&
+                           incoming().bidCount == existing().bidCount + 1 &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'currentBidLakhs', 'highestBidderTeamId', 'highestBidderName',
+                             'bidDeadlineEpochMs', 'bidCount', 'lastEventMessage', 'updatedAt'
+                           ])
+                         ) ||
+                         // Action 4: Room member uses Right to Match (RTM) card during AUCTION
+                         (
+                           existing().status == 'AUCTION' &&
+                           (incoming().status == 'AUCTION' || incoming().status == 'SQUAD_SELECTION') &&
+                           (!isSignedIn() || request.auth.uid in existing().memberUids) &&
+                           existing().currentBidLakhs > 0 &&
+                           incoming().teams.size() == existing().teams.size() &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'status', 'teams', 'currentPlayerIndex', 'currentBidLakhs',
+                             'highestBidderTeamId', 'highestBidderName', 'bidDeadlineEpochMs',
+                             'bidCount', 'soldCount', 'unsoldCount', 'lastEventMessage', 'updatedAt'
+                           ])
+                         ) ||
+                         // Action 5: Room member saves Playing XI during SQUAD_SELECTION or MATCH_HUB
+                         (
+                           (existing().status == 'SQUAD_SELECTION' || existing().status == 'MATCH_HUB') &&
+                           incoming().status == existing().status &&
+                           (!isSignedIn() || request.auth.uid in existing().memberUids) &&
+                           incoming().teams.size() == existing().teams.size() &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['teams', 'lastEventMessage', 'updatedAt'])
+                         ) ||
+                         // Action 6: Host manages lobby bots/toggle, retention, auction lots, or stage transitions
+                         (
+                           isAuthorizedActor(existing().hostUid) &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'status', 'autoFillEightTeams', 'teams', 'auctionOrder', 'currentPlayerIndex',
+                             'currentBidLakhs', 'highestBidderTeamId', 'highestBidderName',
+                             'bidDeadlineEpochMs', 'bidCount', 'soldCount', 'unsoldCount',
+                             'lastEventMessage', 'updatedAt'
+                           ])
+                         )
+                       );
+
+      allow delete: if isSignedIn() && isValidRoomCode(roomId) && existing().hostUid == request.auth.uid;
+
+      // --- 3. MATCH RECORDS SUBCOLLECTION ---
+      match /matches/{matchId} {
+        allow get: if isValidRoomCode(roomId) && isValidId(matchId);
+        allow list: if isValidRoomCode(roomId);
+
+        allow create: if isValidRoomCode(roomId) &&
+                         isValidId(matchId) &&
+                         incoming().roomCode == roomId &&
+                         isAuthorizedActor(incoming().hostUid) &&
+                         incoming().hostUid in incoming().memberUids &&
+                         incoming().keys().hasAll([
+                           'roomCode', 'hostUid', 'memberUids', 'stage',
+                           'teamAId', 'teamAName', 'teamBId', 'teamBName',
+                           'teamAScore', 'teamAWickets', 'teamAOvers', 'teamABalls',
+                           'teamBScore', 'teamBWickets', 'teamBOvers', 'teamBBalls',
+                           'winnerTeamId', 'winnerTeamName', 'resultSummary',
+                           'playerOfTheMatch', 'innings1Worm', 'innings2Worm',
+                           'status', 'createdAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'roomCode', 'hostUid', 'memberUids', 'stage',
+                           'teamAId', 'teamAName', 'teamBId', 'teamBName',
+                           'teamAScore', 'teamAWickets', 'teamAOvers', 'teamABalls',
+                           'teamBScore', 'teamBWickets', 'teamBOvers', 'teamBBalls',
+                           'winnerTeamId', 'winnerTeamName', 'resultSummary',
+                           'playerOfTheMatch', 'innings1Worm', 'innings2Worm',
+                           'status', 'createdAt'
+                         ]) &&
+                         isValidMatchRecord(incoming()) &&
+                         exists(/databases/$(database)/documents/rooms/$(roomId)) &&
+                         incoming().hostUid in get(/databases/$(database)/documents/rooms/$(roomId)).data.memberUids;
+
+        allow update: if false;
+
+        allow delete: if isSignedIn() && isValidRoomCode(roomId) && isValidId(matchId) &&
+                         existing().hostUid == request.auth.uid;
+      }
+    }
+  }
+}

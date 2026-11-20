@@ -1,0 +1,32 @@
+<resources>
+    <string name="app_name">CricBid</string>
+    <string name="tagline_broadcast">LIVE CRICKET AUCTION &amp; T20 ARENA</string>
+    <string name="sign_in_with_google">Sign in with Google</string>
+    <string name="sign_out">Sign out</string>
+    <string name="create_room_title">Host New Auction</string>
+    <string name="join_room_title">Join With 4-Digit Code</string>
+    <string name="team_name_label">Your Franchise Name</string>
+    <string name="room_code_label">4-Digit Room Code</string>
+    <string name="create_room_cta">Create Room (₹100 Cr Purse)</string>
+    <string name="join_room_cta">Join Auction Lobby</string>
+    <string name="add_ai_bot">Add AI Bot Manager</string>
+    <string name="start_live_auction">Start Live Auction</string>
+    <string name="bid_cta">BID</string>
+    <string name="lock_playing_xi">Lock Playing XI</string>
+    <string name="simulate_match_cta">Simulate T20 Match</string>
+    <string name="welcome_username_label">Manager Username</string>
+    <string name="continue_play_cta">Play as Guest (No Sign-In)</string>
+    <string name="edit_username">Edit Username</string>
+    <string name="connect_cloud_sync">Optional: Link Google Account for Profile Backup</string>
+    <string name="intl_hub_title">International Cricket</string>
+    <string name="intl_hub_subtitle">T20I • ODI • Test • Custom Series (1/3/5/7) &amp; World Cup</string>
+    <string name="standings_title">Standings</string>
+    <string name="career_mode_title">Career Mode</string>
+    <string name="career_mode_subtitle">Road to Legend • Domestic → IPL Auction → Intl Captain → Hall of Fame</string>
+    <string name="career_difficulty_label">Career Difficulty</string>
+    <string name="notif_channel_auction_name">Auction Turn Alerts</string>
+    <string name="notif_channel_auction_desc">Alerts when a new auction lot opens, you are outbid, or your retention turn starts.</string>
+    <string name="notif_channel_match_name">Match Kickoff Alerts</string>
+    <string name="notif_channel_match_desc">Alerts when a match involving your team is ready or about to begin.</string>
+    <string name="notif_settings_title">Local Alerts &amp; Notifications</string>
+</resources>

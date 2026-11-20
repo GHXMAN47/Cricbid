@@ -1,0 +1,118 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Manager profile and preferences scoped to authenticated user.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Authenticated Firebase UID." },
+        "displayName": { "type": "string", "description": "Manager display name." },
+        "favoriteTeamName": { "type": "string", "description": "Default franchise name." },
+        "matchesPlayed": { "type": "integer", "description": "Total T20 matches simulated." },
+        "matchesWon": { "type": "integer", "description": "Total T20 matches won." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp." }
+      },
+      "required": ["userId", "displayName", "matchesPlayed", "matchesWon", "createdAt", "updatedAt"]
+    },
+    "AuctionRoom": {
+      "title": "AuctionRoom",
+      "description": "Real-time multiplayer Cricket Auction room keyed by 4-digit room code supporting up to 8 teams, Marquee Retention, RTM cards, and 120-player pool.",
+      "type": "object",
+      "properties": {
+        "roomCode": { "type": "string", "description": "4-digit numeric room code matching the document ID." },
+        "hostUid": { "type": "string", "description": "Firebase UID of the room host." },
+        "memberUids": { "type": "array", "description": "Authenticated human manager UIDs (max 8)." },
+        "status": {
+          "type": "string",
+          "enum": ["LOBBY", "RETENTION", "AUCTION", "SQUAD_SELECTION", "MATCH_HUB", "COMPLETED"],
+          "description": "Current room lifecycle stage."
+        },
+        "autoFillEightTeams": {
+          "type": "boolean",
+          "description": "When true, unfilled team slots up to 8 are filled automatically by Smart AI managers on start."
+        },
+        "teams": {
+          "type": "array",
+          "description": "Bounded list (max 8) of franchise objects including AI bots, purse, rtmRemaining, retainedPlayerId, squad, and Playing XI."
+        },
+        "auctionOrder": { "type": "array", "description": "Ordered list (max 120) of cricketer IDs." },
+        "currentPlayerIndex": { "type": "integer", "description": "Active cricketer index in auctionOrder." },
+        "currentBidLakhs": { "type": "integer", "description": "Current bid in INR Lakhs." },
+        "highestBidderTeamId": { "type": "string", "description": "Leading team ID or empty." },
+        "highestBidderName": { "type": "string", "description": "Leading team name or empty." },
+        "bidDeadlineEpochMs": { "type": "integer", "description": "10-second countdown deadline epoch millis." },
+        "bidCount": { "type": "integer", "description": "Bid count for active lot." },
+        "soldCount": { "type": "integer", "description": "Total players sold." },
+        "unsoldCount": { "type": "integer", "description": "Total players unsold." },
+        "lastEventMessage": { "type": "string", "description": "Live broadcast event ticker." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp." }
+      },
+      "required": [
+        "roomCode", "hostUid", "memberUids", "status", "autoFillEightTeams", "teams",
+        "auctionOrder", "currentPlayerIndex", "currentBidLakhs",
+        "highestBidderTeamId", "highestBidderName", "bidDeadlineEpochMs",
+        "bidCount", "soldCount", "unsoldCount", "lastEventMessage",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "MatchRecord": {
+      "title": "MatchRecord",
+      "description": "Completed T20 match record inside a room (Series, League, or IPL Playoffs).",
+      "type": "object",
+      "properties": {
+        "roomCode": { "type": "string" },
+        "hostUid": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "stage": {
+          "type": "string",
+          "enum": ["SERIES", "LEAGUE", "QUALIFIER_1", "ELIMINATOR", "QUALIFIER_2", "FINAL"]
+        },
+        "teamAId": { "type": "string" },
+        "teamAName": { "type": "string" },
+        "teamBId": { "type": "string" },
+        "teamBName": { "type": "string" },
+        "teamAScore": { "type": "integer" },
+        "teamAWickets": { "type": "integer" },
+        "teamAOvers": { "type": "string" },
+        "teamABalls": { "type": "integer" },
+        "teamBScore": { "type": "integer" },
+        "teamBWickets": { "type": "integer" },
+        "teamBOvers": { "type": "string" },
+        "teamBBalls": { "type": "integer" },
+        "winnerTeamId": { "type": "string" },
+        "winnerTeamName": { "type": "string" },
+        "resultSummary": { "type": "string" },
+        "playerOfTheMatch": { "type": "string" },
+        "innings1Worm": { "type": "array" },
+        "innings2Worm": { "type": "array" },
+        "status": { "type": "string", "enum": ["COMPLETED"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "roomCode", "hostUid", "memberUids", "stage",
+        "teamAId", "teamAName", "teamBId", "teamBName",
+        "teamAScore", "teamAWickets", "teamAOvers", "teamABalls",
+        "teamBScore", "teamBWickets", "teamBOvers", "teamBBalls",
+        "winnerTeamId", "winnerTeamName", "resultSummary",
+        "playerOfTheMatch", "innings1Worm", "innings2Worm",
+        "status", "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Manager profile document isolated per authenticated user."
+    },
+    "/rooms/{roomId}": {
+      "schema": { "$ref": "#/entities/AuctionRoom" },
+      "description": "Real-time multiplayer auction room keyed by 4-digit room code."
+    },
+    "/rooms/{roomId}/matches/{matchId}": {
+      "schema": { "$ref": "#/entities/MatchRecord" },
+      "description": "Simulated T20 match records belonging to an auction room."
+    }
+  }
+}
