@@ -308,11 +308,15 @@ class CricBidViewModel(
     }
 
     fun retainMarqueePlayer(playerId: String) {
+        submitMultiRetentions(listOf(playerId))
+    }
+
+    fun submitMultiRetentions(playerIds: List<String>) {
         val room = _activeState.value.room ?: return
         val myTeam = room.teamForUser(currentUserId) ?: return
         viewModelScope.launch {
             _activeState.update { it.copy(busy = true) }
-            val res = repository.retainOrSkipMarquee(room.roomCode, myTeam.teamId, playerId)
+            val res = repository.submitMultiRetentions(room.roomCode, myTeam.teamId, playerIds)
             _activeState.update { it.copy(busy = false) }
             res.onFailure { err -> showMessage(err.message ?: "Retention failed") }
         }
@@ -323,7 +327,7 @@ class CricBidViewModel(
         val myTeam = room.teamForUser(currentUserId) ?: return
         viewModelScope.launch {
             _activeState.update { it.copy(busy = true) }
-            val res = repository.retainOrSkipMarquee(room.roomCode, myTeam.teamId, null)
+            val res = repository.submitMultiRetentions(room.roomCode, myTeam.teamId, emptyList())
             _activeState.update { it.copy(busy = false) }
             res.onFailure { err -> showMessage(err.message ?: "Could not skip retention") }
         }
@@ -336,6 +340,19 @@ class CricBidViewModel(
             val res = repository.beginLiveAuctionFromRetention(code)
             _activeState.update { it.copy(busy = false) }
             res.onFailure { err -> showMessage(err.message ?: "Cannot start live auction") }
+        }
+    }
+
+    fun startNewSeasonMegaAuction() {
+        val code = _activeState.value.activeRoomCode ?: return
+        viewModelScope.launch {
+            _activeState.update { it.copy(busy = true) }
+            val res = repository.startNewSeasonMegaAuction(code)
+            _activeState.update { it.copy(busy = false) }
+            res.fold(
+                onSuccess = { showMessage("New Season Mega Auction started! Retain up to 4 players + 1 RTM.") },
+                onFailure = { err -> showMessage(err.message ?: "Unable to start new season") }
+            )
         }
     }
 

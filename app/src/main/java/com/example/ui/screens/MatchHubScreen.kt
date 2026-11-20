@@ -27,6 +27,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.Gavel
 import androidx.compose.material.icons.filled.Leaderboard
 import androidx.compose.material.icons.filled.SportsCricket
 import androidx.compose.material3.Button
@@ -61,6 +62,7 @@ import com.example.data.model.MatchRecord
 import com.example.data.model.MatchStage
 import com.example.data.model.TeamState
 import com.example.engine.PlayoffSlot
+import com.example.engine.SeasonLeaderboardSummary
 import com.example.engine.SeriesSummary
 import com.example.engine.TeamStanding
 import com.example.engine.TournamentEngine
@@ -90,6 +92,9 @@ fun MatchHubScreen(
     onOpenStandings: () -> Unit = {},
     onStartMatch: (TeamState, TeamState, MatchStage) -> Unit,
     onQuickSimLeague: (List<Pair<TeamState, TeamState>>) -> Unit,
+    seasonLeaderboards: SeasonLeaderboardSummary = SeasonLeaderboardSummary(),
+    onOpenTrophyCabinet: () -> Unit = {},
+    onStartNewSeasonMegaAuction: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     BackHandler(onBack = onBack)
@@ -251,6 +256,140 @@ fun MatchHubScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = BroadcastSilver
                         )
+                    }
+                }
+            }
+
+            // Start New Season Mega Auction (4 Tiered Retentions + 1 RTM Card) when Champions Crowned
+            if (overview.championTeamName != null && onStartNewSeasonMegaAuction != null) {
+                item {
+                    Surface(
+                        color = AuctionGold.copy(alpha = 0.14f),
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.4.dp, AuctionGold.copy(alpha = 0.75f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "SEASON COMPLETE — READY FOR MEGA AUCTION?",
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    color = AuctionGold,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                            )
+                            Text(
+                                text = "Retain up to 4 players from your current squad (₹15/11/8/6 Cr) and use 1 RTM card on unretained former squad players!",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = BroadcastSilver
+                            )
+                            Button(
+                                onClick = onStartNewSeasonMegaAuction,
+                                enabled = !busy,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = AuctionGold,
+                                    contentColor = OnGoldDark
+                                ),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(46.dp)
+                                    .testTag("start_new_season_mega_auction_button")
+                            ) {
+                                Icon(Icons.Filled.Gavel, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = "Start New Season Mega Auction",
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Season Caps & MVP Leaderboard Strip (Orange Cap / Purple Cap / MVP)
+            if (seasonLeaderboards.hasData) {
+                item {
+                    Surface(
+                        color = NavySurface,
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, AuctionGold.copy(alpha = 0.45f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable(onClick = onOpenTrophyCabinet)
+                            .testTag("match_hub_season_caps_strip")
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "SEASON AWARDS & CAPS",
+                                    style = MaterialTheme.typography.titleSmall.copy(
+                                        fontFamily = DisplayFontFamily,
+                                        letterSpacing = 0.8.sp,
+                                        color = AuctionGold
+                                    )
+                                )
+                                Text(
+                                    text = "Full Caps & Trophies →",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        color = TurfEmerald,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                val orange = seasonLeaderboards.orangeCapHolder
+                                val purple = seasonLeaderboards.purpleCapHolder
+                                val mvp = seasonLeaderboards.mvpHolder
+                                Surface(
+                                    color = NavySurfaceHigh,
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Column(modifier = Modifier.padding(8.dp)) {
+                                        Text("🟠 ORANGE CAP", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold), color = androidx.compose.ui.graphics.Color(0xFFFF8C00))
+                                        Text(orange?.playerName ?: "—", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), color = BroadcastWhite, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text("${orange?.runs ?: 0} runs", style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily), color = BroadcastSilver)
+                                    }
+                                }
+                                Surface(
+                                    color = NavySurfaceHigh,
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Column(modifier = Modifier.padding(8.dp)) {
+                                        Text("🟣 PURPLE CAP", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold), color = androidx.compose.ui.graphics.Color(0xFFA855F7))
+                                        Text(purple?.playerName ?: "—", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), color = BroadcastWhite, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text("${purple?.wickets ?: 0} wkts", style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily), color = BroadcastSilver)
+                                    }
+                                }
+                                Surface(
+                                    color = NavySurfaceHigh,
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Column(modifier = Modifier.padding(8.dp)) {
+                                        Text("⭐ SEASON MVP", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold), color = AuctionGold)
+                                        Text(mvp?.playerName ?: "—", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), color = BroadcastWhite, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text("${mvp?.mvpPoints?.toInt() ?: 0} pts", style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily), color = BroadcastSilver)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

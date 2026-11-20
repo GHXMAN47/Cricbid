@@ -48,6 +48,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.engine.DeliveryType
+import com.example.engine.FieldPreset
 import com.example.engine.InteractiveBallInput
 import com.example.engine.InteractivePlayFilter
 import com.example.engine.InteractivePlayRole
@@ -83,6 +84,11 @@ fun LeftThumbControlPod(
     onSelectShot: (ShotDirection) -> Unit,
     onSelectDelivery: (DeliveryType) -> Unit,
     playFilter: InteractivePlayFilter = InteractivePlayFilter.BOTH,
+    fieldPreset: FieldPreset = FieldPreset.BALANCED,
+    onSelectFieldPreset: (FieldPreset) -> Unit = {},
+    batterConfidence: Int = 45,
+    bowlerStamina: Int = 100,
+    dewActive: Boolean = false,
     compact: Boolean = false,
     modifier: Modifier = Modifier
 ) {
@@ -147,6 +153,15 @@ fun LeftThumbControlPod(
             }
 
             if (activeRole == InteractivePlayRole.BATTING) {
+                PlayerVitalMiniBar(
+                    label = "BAT CONFIDENCE",
+                    percent = batterConfidence,
+                    accent = when {
+                        batterConfidence >= 70 -> AuctionGold
+                        batterConfidence >= 40 -> TurfEmerald
+                        else -> BoundarySky
+                    }
+                )
                 Text(
                     text = "SHOT DIRECTION",
                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, letterSpacing = 0.6.sp),
@@ -199,8 +214,18 @@ fun LeftThumbControlPod(
                     )
                 }
             } else {
+                PlayerVitalMiniBar(
+                    label = "BOWLER STAMINA",
+                    percent = bowlerStamina,
+                    accent = when {
+                        bowlerStamina < 40 -> WicketCrimson
+                        bowlerStamina < 68 -> AuctionGold
+                        else -> TurfEmerald
+                    }
+                )
+                val effSpeed = selectedDelivery.effectiveSpeedKph(bowlerStamina, dewActive)
                 Text(
-                    text = "DELIVERY • ${selectedDelivery.speedKph} KPH",
+                    text = "DELIVERY • $effSpeed KPH${if (dewActive) " • DEW" else ""}",
                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, letterSpacing = 0.6.sp),
                     color = BoundarySky,
                     maxLines = 1,
@@ -261,7 +286,96 @@ fun LeftThumbControlPod(
                             .testTag("delivery_spin")
                     )
                 }
+                // One-Tap Bowling Field Presets
+                Text(
+                    text = "FIELD PRESET",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp, letterSpacing = 0.6.sp),
+                    color = BroadcastMuted
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    FieldPreset.entries.forEach { preset ->
+                        val active = preset == fieldPreset
+                        val presetAccent = when (preset) {
+                            FieldPreset.ATTACKING -> WicketCrimson
+                            FieldPreset.BALANCED -> TurfEmerald
+                            FieldPreset.DEFENSIVE -> BoundarySky
+                            FieldPreset.DEATH_OVERS -> AuctionGold
+                        }
+                        Surface(
+                            color = if (active) presetAccent.copy(alpha = 0.24f) else NavySurfaceHigh,
+                            shape = RoundedCornerShape(7.dp),
+                            border = BorderStroke(1.dp, if (active) presetAccent else NavyOutline),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(28.dp)
+                                .clip(RoundedCornerShape(7.dp))
+                                .clickable { onSelectFieldPreset(preset) }
+                                .testTag("field_preset_${preset.name.lowercase()}")
+                        ) {
+                            Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 2.dp)) {
+                                Text(
+                                    text = preset.shortLabel,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 8.sp,
+                                        fontWeight = if (active) FontWeight.ExtraBold else FontWeight.SemiBold,
+                                        color = if (active) presetAccent else BroadcastSilver
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun PlayerVitalMiniBar(
+    label: String,
+    percent: Int,
+    accent: Color
+) {
+    val clamped = percent.coerceIn(0, 100)
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp, letterSpacing = 0.5.sp),
+                color = BroadcastMuted
+            )
+            Text(
+                text = "$clamped%",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 9.sp,
+                    fontFamily = MonoFontFamily,
+                    fontWeight = FontWeight.Bold,
+                    color = accent
+                )
+            )
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(5.dp)
+                .clip(RoundedCornerShape(3.dp))
+                .background(NavyMidnight)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(clamped / 100f)
+                    .height(5.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(accent)
+            )
         }
     }
 }
@@ -278,9 +392,20 @@ fun RightThumbTimingPod(
     selectedDelivery: DeliveryType,
     enabled: Boolean,
     onExecuteBall: (InteractiveBallInput) -> Unit,
+    batterConfidence: Int = 45,
+    bowlerStamina: Int = 100,
+    fieldPreset: FieldPreset = FieldPreset.BALANCED,
     compact: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    val sweetSpotBonus = if (activeRole == InteractivePlayRole.BATTING) {
+        TimingGrade.confidenceWindowBonus(batterConfidence)
+    } else {
+        TimingGrade.staminaWindowPenalty(bowlerStamina)
+    }
+    val perfectHalf = (0.08f + sweetSpotBonus).coerceIn(0.045f, 0.145f)
+    val goodHalf = (0.24f + sweetSpotBonus * 1.4f).coerceIn(0.16f, 0.34f)
+
     val gaugeTransition = rememberInfiniteTransition(label = "timing_gauge")
     val cursor by gaugeTransition.animateFloat(
         initialValue = 0f,
@@ -294,7 +419,7 @@ fun RightThumbTimingPod(
         ),
         label = "timing_cursor"
     )
-    val liveGrade = TimingGrade.fromGaugeCursor(cursor)
+    val liveGrade = TimingGrade.fromGaugeCursor(cursor, sweetSpotBonus)
     val gradeColor = when (liveGrade) {
         TimingGrade.PERFECT -> TurfEmerald
         TimingGrade.GOOD -> AuctionGold
@@ -331,7 +456,7 @@ fun RightThumbTimingPod(
                 )
             }
 
-            // Color-Coded Timing Bar (EARLY | GOOD | PERFECT | GOOD | LATE) + Sweeping Needle
+            // Dynamic Color-Coded Timing Bar (widens with Batter Confidence / narrows with low Bowler Stamina)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -342,16 +467,16 @@ fun RightThumbTimingPod(
                 Canvas(modifier = Modifier.fillMaxWidth().height(22.dp)) {
                     val w = size.width
                     val h = size.height
-                    // Early zone (0..0.26)
-                    drawRect(color = WicketCrimson.copy(alpha = 0.55f), topLeft = Offset.Zero, size = Size(w * 0.26f, h))
-                    // Left Good zone (0.26..0.42)
-                    drawRect(color = AuctionGold.copy(alpha = 0.65f), topLeft = Offset(w * 0.26f, 0f), size = Size(w * 0.16f, h))
-                    // Center PERFECT Sweet Spot (0.42..0.58)
-                    drawRect(color = TurfEmerald, topLeft = Offset(w * 0.42f, 0f), size = Size(w * 0.16f, h))
-                    // Right Good zone (0.58..0.74)
-                    drawRect(color = AuctionGold.copy(alpha = 0.65f), topLeft = Offset(w * 0.58f, 0f), size = Size(w * 0.16f, h))
-                    // Late zone (0.74..1.00)
-                    drawRect(color = WicketCrimson.copy(alpha = 0.55f), topLeft = Offset(w * 0.74f, 0f), size = Size(w * 0.26f, h))
+                    val leftGoodStart = (0.5f - goodHalf).coerceIn(0.08f, 0.42f)
+                    val leftPerfectStart = (0.5f - perfectHalf).coerceIn(leftGoodStart, 0.48f)
+                    val rightPerfectEnd = (0.5f + perfectHalf).coerceIn(0.52f, 0.92f)
+                    val rightGoodEnd = (0.5f + goodHalf).coerceIn(rightPerfectEnd, 0.96f)
+
+                    drawRect(color = WicketCrimson.copy(alpha = 0.55f), topLeft = Offset.Zero, size = Size(w * leftGoodStart, h))
+                    drawRect(color = AuctionGold.copy(alpha = 0.65f), topLeft = Offset(w * leftGoodStart, 0f), size = Size(w * (leftPerfectStart - leftGoodStart), h))
+                    drawRect(color = TurfEmerald, topLeft = Offset(w * leftPerfectStart, 0f), size = Size(w * (rightPerfectEnd - leftPerfectStart), h))
+                    drawRect(color = AuctionGold.copy(alpha = 0.65f), topLeft = Offset(w * rightPerfectEnd, 0f), size = Size(w * (rightGoodEnd - rightPerfectEnd), h))
+                    drawRect(color = WicketCrimson.copy(alpha = 0.55f), topLeft = Offset(w * rightGoodEnd, 0f), size = Size(w * (1f - rightGoodEnd), h))
 
                     // Bright White Sweeping Needle
                     val needleX = (cursor * w).coerceIn(3f, w - 3f)
@@ -377,13 +502,14 @@ fun RightThumbTimingPod(
             val isBat = activeRole == InteractivePlayRole.BATTING
             Button(
                 onClick = {
-                    val grade = TimingGrade.fromGaugeCursor(cursor)
+                    val grade = TimingGrade.fromGaugeCursor(cursor, sweetSpotBonus)
                     onExecuteBall(
                         InteractiveBallInput(
                             role = activeRole,
                             shotDirection = selectedShot,
                             deliveryType = selectedDelivery,
-                            timingGrade = grade
+                            timingGrade = grade,
+                            fieldPreset = fieldPreset
                         )
                     )
                 },

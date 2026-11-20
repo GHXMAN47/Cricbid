@@ -57,13 +57,16 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.MatchFormat
 import com.example.engine.ActionAnimationSnapshot
 import com.example.engine.DeliveryType
+import com.example.engine.FieldPreset
 import com.example.engine.InningsState
 import com.example.engine.InteractiveBallInput
 import com.example.engine.InteractivePhaseResolver
 import com.example.engine.InteractivePlayFilter
 import com.example.engine.InteractivePlayRole
 import com.example.engine.LiveMatchState
+import com.example.engine.PitchType
 import com.example.engine.ShotDirection
+import com.example.engine.WeatherCondition
 import com.example.ui.components.CricketActionPitchCanvas
 import com.example.ui.components.LeftThumbControlPod
 import com.example.ui.components.MatchSoundEffects
@@ -126,6 +129,9 @@ internal fun LandscapeActionBroadcastView(
     onToggleAutoPlay: () -> Unit,
     onCycleSpeed: () -> Unit,
     onSimFullMatch: () -> Unit,
+    onSelectFieldPreset: (FieldPreset) -> Unit = {},
+    onStartDrsReview: () -> Unit = {},
+    onDismissDrs: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val strikerName = activeInn.striker?.name ?: "Striker"
@@ -160,6 +166,9 @@ internal fun LandscapeActionBroadcastView(
             strikerName = strikerName,
             bowlerName = bowlerName,
             isRedBall = match.format == MatchFormat.TEST,
+            pitchType = match.pitchType,
+            dewActive = match.isDewActiveNow,
+            fieldPreset = match.fieldPreset,
             soundEffects = soundEffects,
             modifier = Modifier.fillMaxSize()
         )
@@ -197,10 +206,12 @@ internal fun LandscapeActionBroadcastView(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    val dewChip = if (match.isDewActiveNow) " • 💧DEW" else ""
+                    val drsChip = " • DRS ${activeInn.battingTeamReviewsRemaining}/${activeInn.bowlingTeamReviewsRemaining}"
                     val targetSub = match.target?.let { tgt ->
                         val rrr = match.requiredRunRate?.let { String.format(Locale.US, " • RRR %.2f", it) }.orEmpty()
-                        "Target $tgt$rrr"
-                    } ?: "${match.format.shortLabel} • CRR ${String.format(Locale.US, "%.2f", activeInn.currentRunRate)} • ${activeInn.phaseLabel}"
+                        "Target $tgt$rrr • ${match.pitchType.shortLabel}$dewChip$drsChip"
+                    } ?: "${match.format.shortLabel} • CRR ${String.format(Locale.US, "%.2f", activeInn.currentRunRate)} • ${match.pitchType.shortLabel}$dewChip$drsChip"
                     Text(
                         text = if (match.isSuperOverActive) "🔥 SUPER OVER #${match.superOverRound} • $targetSub" else targetSub,
                         style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
@@ -264,6 +275,50 @@ internal fun LandscapeActionBroadcastView(
             }
         }
 
+        // Floating DRS Call Banner in Landscape (when a close LBW/Caught-Behind appeal is reviewable)
+        match.pendingDrs?.let { drs ->
+            Surface(
+                color = NavySurface.copy(alpha = 0.94f),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.4.dp, AuctionGold),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 56.dp, start = 16.dp, end = 16.dp)
+                    .testTag("landscape_drs_prompt_banner")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val drsReviewsLeft = if (drs.isBattingTeamReview) activeInn.battingTeamReviewsRemaining else activeInn.bowlingTeamReviewsRemaining
+                    Text(
+                        text = "DRS: ${drs.dismissalLabel} (${if (drs.originalDecisionOut) "Given OUT" else "NOT OUT"}) • $drsReviewsLeft left",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = AuctionGold
+                    )
+                    Button(
+                        onClick = onStartDrsReview,
+                        colors = ButtonDefaults.buttonColors(containerColor = AuctionGold, contentColor = NavyMidnight),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.height(30.dp).testTag("drs_trigger_button")
+                    ) {
+                        Text("Review", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold))
+                    }
+                    OutlinedButton(
+                        onClick = onDismissDrs,
+                        border = BorderStroke(1.dp, NavyOutline),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.height(30.dp).testTag("drs_dismiss_button")
+                    ) {
+                        Text("Accept", style = MaterialTheme.typography.labelSmall, color = BroadcastSilver)
+                    }
+                }
+            }
+        }
+
         // Left Thumb Pod (Play Mode Filter + Shot/Delivery Selector + Hybrid Auto-Sim strip)
         Column(
             modifier = Modifier
@@ -285,6 +340,11 @@ internal fun LandscapeActionBroadcastView(
                 onSelectShot = onSelectShot,
                 onSelectDelivery = onSelectDelivery,
                 playFilter = playFilter,
+                fieldPreset = match.fieldPreset,
+                onSelectFieldPreset = onSelectFieldPreset,
+                batterConfidence = activeInn.currentBatterConfidence,
+                bowlerStamina = activeInn.currentBowlerStamina,
+                dewActive = match.isDewActiveNow,
                 compact = true,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -356,6 +416,9 @@ internal fun LandscapeActionBroadcastView(
                     selectedDelivery = selectedDelivery,
                     enabled = !match.finished,
                     onExecuteBall = onPlayInteractiveBall,
+                    batterConfidence = activeInn.currentBatterConfidence,
+                    bowlerStamina = activeInn.currentBowlerStamina,
+                    fieldPreset = match.fieldPreset,
                     compact = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -418,6 +481,7 @@ internal fun PortraitActionTabContent(
     onSelectDelivery: (DeliveryType) -> Unit,
     onPlayInteractiveBall: (InteractiveBallInput) -> Unit,
     onSimInnings: () -> Unit,
+    onSelectFieldPreset: (FieldPreset) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val strikerName = activeInn.striker?.name ?: "Striker"
@@ -443,6 +507,9 @@ internal fun PortraitActionTabContent(
             strikerName = strikerName,
             bowlerName = bowlerName,
             isRedBall = match.format == MatchFormat.TEST,
+            pitchType = match.pitchType,
+            dewActive = match.isDewActiveNow,
+            fieldPreset = match.fieldPreset,
             soundEffects = soundEffects,
             modifier = Modifier
                 .fillMaxWidth()
@@ -483,6 +550,11 @@ internal fun PortraitActionTabContent(
                         onSelectShot = onSelectShot,
                         onSelectDelivery = onSelectDelivery,
                         playFilter = playFilter,
+                        fieldPreset = match.fieldPreset,
+                        onSelectFieldPreset = onSelectFieldPreset,
+                        batterConfidence = activeInn.currentBatterConfidence,
+                        bowlerStamina = activeInn.currentBowlerStamina,
+                        dewActive = match.isDewActiveNow,
                         compact = true,
                         modifier = Modifier.weight(1f)
                     )
@@ -492,6 +564,9 @@ internal fun PortraitActionTabContent(
                         selectedDelivery = selectedDelivery,
                         enabled = !match.finished,
                         onExecuteBall = onPlayInteractiveBall,
+                        batterConfidence = activeInn.currentBatterConfidence,
+                        bowlerStamina = activeInn.currentBowlerStamina,
+                        fieldPreset = match.fieldPreset,
                         compact = true,
                         modifier = Modifier.weight(1f)
                     )
@@ -545,11 +620,14 @@ internal fun PreMatchPlayModeOverlay(
     match: LiveMatchState,
     userTeamId: String,
     initialFilter: InteractivePlayFilter,
-    onConfirmStart: (InteractivePlayFilter) -> Unit,
+    onConfirmStart: (InteractivePlayFilter, PitchType, WeatherCondition, Boolean) -> Unit,
     onQuickAutoSimMatch: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var chosenFilter by remember(initialFilter) { mutableStateOf(initialFilter) }
+    var chosenPitch by remember(match.pitchType) { mutableStateOf(match.pitchType) }
+    var chosenWeather by remember(match.weatherCondition) { mutableStateOf(match.weatherCondition) }
+    var chosenDew by remember(match.dewFactor2ndInnings) { mutableStateOf(match.dewFactor2ndInnings) }
     val userTeamName = if (match.teamB.teamId == userTeamId) match.teamB.teamName else match.teamA.teamName
     val userBattingFirst = InteractivePhaseResolver.isUserTeamBatting(match, userTeamId)
 
@@ -671,6 +749,133 @@ internal fun PreMatchPlayModeOverlay(
                     }
                 }
 
+                // Pitch & Weather Conditions Selector
+                Surface(
+                    color = NavySurfaceHigh,
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, NavyOutline),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "PITCH & MATCH CONDITIONS",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = AuctionGold,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.8.sp
+                            )
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            PitchType.entries.forEach { pt ->
+                                val selected = pt == chosenPitch
+                                val accent = when (pt) {
+                                    PitchType.GREEN -> TurfEmerald
+                                    PitchType.DUSTY -> AuctionGold
+                                    PitchType.FLAT -> BoundarySky
+                                    PitchType.BALANCED -> BroadcastSilver
+                                }
+                                Surface(
+                                    color = if (selected) accent.copy(alpha = 0.22f) else NavyMidnight,
+                                    shape = RoundedCornerShape(9.dp),
+                                    border = BorderStroke(if (selected) 1.4.dp else 1.dp, if (selected) accent else NavyOutline),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(34.dp)
+                                        .clip(RoundedCornerShape(9.dp))
+                                        .clickable { chosenPitch = pt }
+                                        .testTag("pitch_select_${pt.name.lowercase()}")
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Text(
+                                            text = pt.shortLabel,
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                                                color = if (selected) accent else BroadcastSilver
+                                            ),
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        Text(
+                            text = "${chosenPitch.label}: ${chosenPitch.summary}",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                            color = BroadcastSilver
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            WeatherCondition.entries.forEach { w ->
+                                val selected = w == chosenWeather
+                                Surface(
+                                    color = if (selected) BoundarySky.copy(alpha = 0.2f) else NavyMidnight,
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = BorderStroke(1.dp, if (selected) BoundarySky else NavyOutline),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(30.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            chosenWeather = w
+                                            if (w == WeatherCondition.CLEAR_NIGHT) chosenDew = true
+                                        }
+                                ) {
+                                    Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 2.dp)) {
+                                        Text(
+                                            text = w.label.split(" ").first(),
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontSize = 10.sp,
+                                                color = if (selected) BoundarySky else BroadcastMuted,
+                                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                            ),
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        // 2nd-Innings Dew Factor Toggle
+                        Surface(
+                            color = if (chosenDew) BoundarySky.copy(alpha = 0.16f) else NavyMidnight,
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, if (chosenDew) BoundarySky else NavyOutline),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { chosenDew = !chosenDew }
+                                .testTag("toggle_dew_factor_button")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "💧 2nd-Innings Dew Factor (aids chasing)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (chosenDew) BroadcastWhite else BroadcastMuted
+                                )
+                                Text(
+                                    text = if (chosenDew) "ON" else "OFF",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = if (chosenDew) BoundarySky else BroadcastMuted
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // Confirm & Start Interactive Match Button
                 val startHint = when {
                     chosenFilter == InteractivePlayFilter.BATTING_ONLY && !userBattingFirst ->
@@ -680,7 +885,7 @@ internal fun PreMatchPlayModeOverlay(
                     else -> "Start Match (${chosenFilter.label})"
                 }
                 Button(
-                    onClick = { onConfirmStart(chosenFilter) },
+                    onClick = { onConfirmStart(chosenFilter, chosenPitch, chosenWeather, chosenDew) },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = TurfEmerald,
                         contentColor = OnEmeraldDark

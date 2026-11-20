@@ -451,7 +451,7 @@ class AuctionRepository(
                         "teams" to teamsWithBotRetentions.map { it.toMap() },
                         "auctionOrder" to remainingOrder,
                         "soldCount" to retainedIds.size.toLong(),
-                        "lastEventMessage" to "${filledTeams.size} Franchises locked! Pick 1 Marquee Retention (₹15 Cr) or Skip.",
+                        "lastEventMessage" to "${filledTeams.size} Franchises locked! Retain up to 4 stars (₹15/11/8/6 Cr) + 1 RTM card.",
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
                 )
@@ -465,7 +465,14 @@ class AuctionRepository(
         }
     }
 
-    override suspend fun retainOrSkipMarquee(roomCode: String, teamId: String, playerId: String?): Result<Unit> {
+    override suspend fun retainOrSkipMarquee(roomCode: String, teamId: String, playerId: String?): Result<Unit> =
+        submitMultiRetentions(roomCode, teamId, listOfNotNull(playerId))
+
+    override suspend fun submitMultiRetentions(
+        roomCode: String,
+        teamId: String,
+        playerIds: List<String>
+    ): Result<Unit> {
         val uid = actorId()
         val path = "rooms/$roomCode"
         return try {
@@ -479,28 +486,46 @@ class AuctionRepository(
                     ?: throw IllegalStateException("Team not found")
                 check(!myTeam.retentionDone) { "Retention already submitted" }
 
+                val uniqueIds = playerIds.distinct().take(SquadRules.MAX_RETENTIONS)
+                val totalCost = SquadRules.totalRetentionCost(uniqueIds.size)
+                if (totalCost > myTeam.budgetLakhs) {
+                    throw IllegalStateException("Not enough purse for ${uniqueIds.size} retentions")
+                }
+
                 var updatedOrder = room.auctionOrder
                 var soldCount = room.soldCount
                 val message: String
 
-                val updatedTeams = if (playerId != null) {
-                    val alreadyTaken = room.teams.any { playerId in it.squadPlayerIds }
-                    if (alreadyTaken) throw IllegalStateException("That Marquee Star was already retained")
-                    val player = CricketerDatabase.getById(playerId)
-                        ?: throw IllegalStateException("Player not found")
-                    updatedOrder = room.auctionOrder.filterNot { it == playerId }
-                    soldCount += 1L
-                    message = "${myTeam.teamName} retained ${player.name} for ₹15 Cr!"
-                    room.teams.map { t ->
-                        if (t.teamId == teamId) {
-                            AuctionBotEngine.applyPurchase(t, player, SquadRules.RETENTION_PRICE_LAKHS).copy(
-                                retainedPlayerId = player.id,
-                                retentionDone = true
-                            )
-                        } else t
+                val updatedTeams = if (uniqueIds.isNotEmpty()) {
+                    val takenByOthers = room.teams.filter { it.teamId != teamId }.flatMap { it.squadPlayerIds }.toSet()
+                    var workingTeam = myTeam
+                    val names = mutableListOf<String>()
+                    uniqueIds.forEachIndexed { slotIdx, pid ->
+                        if (pid in takenByOthers || pid in workingTeam.squadPlayerIds) {
+                            throw IllegalStateException("That star was already retained")
+                        }
+                        val player = CricketerDatabase.getById(pid)
+                            ?: throw IllegalStateException("Player not found")
+                        workingTeam = AuctionBotEngine.applyPurchase(
+                            workingTeam,
+                            player,
+                            SquadRules.retentionPriceForSlot(slotIdx)
+                        )
+                        names.add(player.name)
+                        updatedOrder = updatedOrder.filterNot { it == pid }
+                        soldCount += 1L
                     }
+                    val remainingFormer = workingTeam.formerSquadPlayerIds.filterNot { it in uniqueIds }
+                    val finalizedTeam = workingTeam.copy(
+                        retainedPlayerId = uniqueIds.first(),
+                        retainedPlayerIds = uniqueIds,
+                        formerSquadPlayerIds = remainingFormer,
+                        retentionDone = true
+                    )
+                    message = "${myTeam.teamName} retained ${uniqueIds.size} star(s) (${names.joinToString(", ")}) for ${CurrencyFormatter.formatLakhs(totalCost)}!"
+                    room.teams.map { t -> if (t.teamId == teamId) finalizedTeam else t }
                 } else {
-                    message = "${myTeam.teamName} skipped retention (kept full ₹100 Cr purse)"
+                    message = "${myTeam.teamName} skipped retentions (kept full ₹100 Cr purse)"
                     room.teams.map { t ->
                         if (t.teamId == teamId) t.copy(retentionDone = true) else t
                     }
@@ -526,7 +551,7 @@ class AuctionRepository(
                             "bidCount" to 0L,
                             "soldCount" to soldCount,
                             "unsoldCount" to 0L,
-                            "lastEventMessage" to "$message • Live Auction starts: ${firstPlayer?.name ?: ""}",
+                            "lastEventMessage" to "$message • Live Auction starts: ${firstPlayer?.name ?: ""}".take(240),
                             "updatedAt" to FieldValue.serverTimestamp()
                         )
                     )
@@ -537,7 +562,7 @@ class AuctionRepository(
                             "teams" to updatedTeams.map { it.toMap() },
                             "auctionOrder" to updatedOrder,
                             "soldCount" to soldCount,
-                            "lastEventMessage" to message,
+                            "lastEventMessage" to message.take(240),
                             "updatedAt" to FieldValue.serverTimestamp()
                         )
                     )
@@ -578,6 +603,59 @@ class AuctionRepository(
                         "bidCount" to 0L,
                         "unsoldCount" to 0L,
                         "lastEventMessage" to "Gavel up! ${firstPlayer.name} opens at ${CurrencyFormatter.formatLakhs(firstPlayer.basePriceLakhs)}",
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, path)
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun startNewSeasonMegaAuction(roomCode: String): Result<Unit> {
+        val uid = actorId()
+        val path = "rooms/$roomCode"
+        return try {
+            val docRef = db.collection("rooms").document(roomCode)
+            db.runTransaction { tx ->
+                val snap = tx.get(docRef)
+                val room = parseRoomSnapshot(snap) ?: throw IllegalStateException("Room not found")
+                check(room.hostUid == uid) { "Only host can launch a New Season Mega Auction" }
+                val resetTeams = room.teams.map { t ->
+                    val carrySquad = t.squadPlayerIds.ifEmpty { t.formerSquadPlayerIds }.distinct().take(15)
+                    TeamState(
+                        teamId = t.teamId,
+                        ownerUid = t.ownerUid,
+                        teamName = t.teamName,
+                        bot = t.bot,
+                        budgetLakhs = SquadRules.INITIAL_BUDGET_LAKHS,
+                        rtmRemaining = SquadRules.INITIAL_RTM_CARDS,
+                        formerSquadPlayerIds = carrySquad,
+                        retentionDone = false
+                    )
+                }
+                val marqueePool = CricketerDatabase.marqueeRetentionPool()
+                val (teamsWithBots, retainedIds) = AuctionBotEngine.applyBotRetentions(resetTeams, marqueePool)
+                val freshOrder = CricketerDatabase.generateAuctionOrder(excludedIds = retainedIds)
+                tx.update(
+                    docRef,
+                    mapOf(
+                        "status" to RoomStatus.RETENTION.name,
+                        "teams" to teamsWithBots.map { it.toMap() },
+                        "auctionOrder" to freshOrder,
+                        "currentPlayerIndex" to 0L,
+                        "currentBidLakhs" to 0L,
+                        "highestBidderTeamId" to "",
+                        "highestBidderName" to "",
+                        "bidDeadlineEpochMs" to 0L,
+                        "bidCount" to 0L,
+                        "soldCount" to retainedIds.size.toLong(),
+                        "unsoldCount" to 0L,
+                        "lastEventMessage" to "New Season Mega Auction! Retain up to 4 players + 1 RTM card.",
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
                 )
@@ -1061,6 +1139,7 @@ class AuctionRepository(
                 "playerOfTheMatch" to record.playerOfTheMatch.take(120).ifBlank { "TBD" },
                 "innings1Worm" to record.innings1Worm.take(20),
                 "innings2Worm" to record.innings2Worm.take(20),
+                "playerPerformances" to record.playerPerformances.take(24).map { it.toMap() },
                 "status" to "COMPLETED",
                 "createdAt" to FieldValue.serverTimestamp()
             )

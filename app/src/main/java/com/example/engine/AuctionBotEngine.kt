@@ -67,30 +67,119 @@ object AuctionBotEngine {
     }
 
     /**
-     * AI Bots each retain 1 unique Marquee Star at ₹15 Cr (1500L) prior to the main auction.
+     * Ensures every franchise entering a Mega Auction Retention Round has a distinct 7-player
+     * previous/core squad so each team can retain up to 4 players (tiered purse deductions)
+     * AND use its 1 RTM card on any unretained former squad player during live bidding.
+     */
+    fun assignFormerSquadsIfMissing(
+        teams: List<TeamState>,
+        previousSquadLookup: (String) -> List<String> = { emptyList() }
+    ): List<TeamState> {
+        val claimedIds = mutableSetOf<String>()
+        teams.forEach { t ->
+            claimedIds.addAll(t.formerSquadPlayerIds)
+            claimedIds.addAll(t.squadPlayerIds)
+        }
+
+        val allPool = com.example.data.model.CricketerDatabase.allPlayers
+        val marqueeIds = com.example.data.model.CricketerDatabase.marqueeRetentionPool().map { it.id }.toSet()
+
+        return teams.map { team ->
+            if (team.formerSquadPlayerIds.isNotEmpty()) {
+                team
+            } else {
+                val chosen = mutableListOf<String>()
+                // 1. Honor persisted previous-season squad if available and unclaimed
+                val savedPrev = previousSquadLookup(team.teamName)
+                    .filter { it !in claimedIds && com.example.data.model.CricketerDatabase.getById(it) != null }
+                for (id in savedPrev.take(7)) {
+                    chosen.add(id)
+                    claimedIds.add(id)
+                }
+
+                // 2. Otherwise seed a realistic 7-player franchise core (2 marquee, 1 WK, 1 AR, 2 bowlers, 1 batter)
+                if (chosen.size < 7) {
+                    val remaining = allPool.filter { it.id !in claimedIds }
+                    fun pickOne(predicate: (Cricketer) -> Boolean) {
+                        if (chosen.size >= 7) return
+                        val candidate = remaining
+                            .filter { it.id !in claimedIds && predicate(it) }
+                            .sortedByDescending { it.overallRating }
+                            .take(4)
+                            .randomOrNull()
+                        if (candidate != null) {
+                            chosen.add(candidate.id)
+                            claimedIds.add(candidate.id)
+                        }
+                    }
+                    // 2 marquee stars (at least 1 domestic)
+                    pickOne { it.id in marqueeIds && !it.overseas }
+                    pickOne { it.id in marqueeIds }
+                    // Balanced supporting core for realistic retention + RTM decisions
+                    pickOne { it.role == PlayerRole.WICKETKEEPER }
+                    pickOne { it.role == PlayerRole.ALL_ROUNDER }
+                    pickOne { it.role == PlayerRole.SEAMER }
+                    pickOne { it.role == PlayerRole.SPINNER }
+                    pickOne { !it.overseas && it.role == PlayerRole.BATTER }
+                    while (chosen.size < 7) {
+                        val fallback = remaining.firstOrNull { it.id !in claimedIds } ?: break
+                        chosen.add(fallback.id)
+                        claimedIds.add(fallback.id)
+                    }
+                }
+                team.copy(formerSquadPlayerIds = chosen)
+            }
+        }
+    }
+
+    /**
+     * AI Bots each retain 2–3 core stars from their former squad using tiered purse deductions
+     * (₹15 Cr, ₹11 Cr, ₹8 Cr, ₹6 Cr). Unretained former players remain in [TeamState.formerSquadPlayerIds]
+     * so they are eligible for that franchise's Right to Match (RTM) card during the live auction.
      */
     fun applyBotRetentions(
         teams: List<TeamState>,
-        marqueePool: List<Cricketer>
+        marqueePool: List<Cricketer>,
+        previousSquadLookup: (String) -> List<String> = { emptyList() }
     ): Pair<List<TeamState>, Set<String>> {
-        val takenIds = teams.mapNotNull { it.retainedPlayerId.takeIf { id -> id.isNotBlank() } }.toMutableSet()
-        val available = marqueePool.filter { it.id !in takenIds }.shuffled().toMutableList()
+        val seededTeams = assignFormerSquadsIfMissing(teams, previousSquadLookup)
+        val takenIds = seededTeams.flatMap { it.retainedPlayerIds + listOfNotNull(it.retainedPlayerId.takeIf { id -> id.isNotBlank() }) }
+            .toMutableSet()
+        val fallbackMarquee = marqueePool.filter { it.id !in takenIds }.shuffled().toMutableList()
 
-        val updated = teams.map { team ->
+        val updated = seededTeams.map { team ->
             if (!team.bot || team.retentionDone) {
                 team
             } else {
-                val pick = available.firstOrNull { !it.overseas || team.overseasCount < SquadRules.MAX_OVERSEAS_IN_SQUAD }
-                if (pick != null) {
-                    available.remove(pick)
-                    takenIds.add(pick.id)
-                    applyPurchase(team, pick, SquadRules.RETENTION_PRICE_LAKHS).copy(
-                        retainedPlayerId = pick.id,
-                        retentionDone = true
-                    )
-                } else {
-                    team.copy(retentionDone = true)
+                val formerPlayers = team.formerSquadPlayerIds
+                    .mapNotNull { com.example.data.model.CricketerDatabase.getById(it) }
+                    .filter { it.id !in takenIds }
+                    .sortedByDescending { it.overallRating }
+
+                val desiredCount = Random.nextInt(2, 4) // Bots retain 2 or 3 stars, leaving 4-5 former players for RTM
+                var working = team
+                val retainedList = mutableListOf<String>()
+
+                val candidates = if (formerPlayers.isNotEmpty()) formerPlayers else fallbackMarquee.toList()
+                for (candidate in candidates) {
+                    if (retainedList.size >= desiredCount || retainedList.size >= SquadRules.MAX_RETENTIONS) break
+                    if (candidate.id in takenIds) continue
+                    if (candidate.overseas && working.overseasCount >= 2) continue // Keep overseas balance
+                    val slotPrice = SquadRules.retentionPriceForSlot(retainedList.size)
+                    if (working.budgetLakhs - slotPrice < 3_500L) break // Keep healthy auction purse
+                    working = applyPurchase(working, candidate, slotPrice)
+                    retainedList.add(candidate.id)
+                    takenIds.add(candidate.id)
+                    fallbackMarquee.removeAll { it.id == candidate.id }
                 }
+
+                val remainingFormerForRtm = working.formerSquadPlayerIds.filterNot { it in retainedList }
+                working.copy(
+                    retainedPlayerId = retainedList.firstOrNull().orEmpty(),
+                    retainedPlayerIds = retainedList,
+                    formerSquadPlayerIds = remainingFormerForRtm,
+                    retentionDone = true
+                )
             }
         }
         return updated to takenIds

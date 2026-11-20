@@ -24,17 +24,21 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AddCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Gavel
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.MeetingRoom
+import androidx.compose.material.icons.filled.MilitaryTech
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
@@ -59,8 +63,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.local.AccountProfile
+import com.example.data.local.SavedMatchResumeSnapshot
 import com.example.data.model.AuctionRoom
 import com.example.data.model.RoomStatus
+import com.example.engine.TrophyCabinetData
 import com.example.ui.components.IndianPlayerAvatar
 import com.example.ui.theme.AuctionGold
 import com.example.ui.theme.BoundarySky
@@ -96,6 +102,12 @@ fun HomeLobbyScreen(
     onClearJoinStatus: () -> Unit = {},
     onConnectCloudSync: () -> Unit,
     onDisconnectCloudSync: () -> Unit,
+    savedMatchSnapshot: SavedMatchResumeSnapshot? = null,
+    onResumeSavedMatch: () -> Unit = {},
+    onDiscardSavedMatch: () -> Unit = {},
+    trophyCabinet: TrophyCabinetData = TrophyCabinetData(),
+    onOpenTrophyCabinet: () -> Unit = {},
+    resumableRoom: AuctionRoom? = null,
     modifier: Modifier = Modifier
 ) {
     var createTeamName by rememberSaveable(profile.favoriteTeamName) {
@@ -276,6 +288,145 @@ fun HomeLobbyScreen(
                 }
             }
 
+            // Auto-Saved Mid-Match Resume Card
+            if (savedMatchSnapshot != null) {
+                item {
+                    Surface(
+                        color = NavySurface,
+                        shape = RoundedCornerShape(18.dp),
+                        border = BorderStroke(1.5.dp, TurfEmerald.copy(alpha = 0.8f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("resume_saved_match_card")
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    color = TurfEmerald.copy(alpha = 0.2f),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = "AUTO-SAVED MATCH IN PROGRESS",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            color = TurfEmerald,
+                                            fontWeight = FontWeight.ExtraBold
+                                        ),
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                    )
+                                }
+                                Text(
+                                    text = savedMatchSnapshot.playFilter.shortLabel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = AuctionGold
+                                )
+                            }
+                            Text(
+                                text = savedMatchSnapshot.headline,
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontFamily = MonoFontFamily,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = BroadcastWhite
+                                )
+                            )
+                            Text(
+                                text = savedMatchSnapshot.subtitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = BroadcastSilver
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = onResumeSavedMatch,
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = TurfEmerald,
+                                        contentColor = OnEmeraldDark
+                                    ),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(44.dp)
+                                        .testTag("resume_saved_match_button")
+                                ) {
+                                    Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("Resume Match", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold))
+                                }
+                                OutlinedButton(
+                                    onClick = onDiscardSavedMatch,
+                                    border = BorderStroke(1.dp, NavyOutline),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .height(44.dp)
+                                        .testTag("discard_saved_match_button")
+                                ) {
+                                    Icon(Icons.Filled.Close, contentDescription = "Discard saved match", tint = BroadcastSilver, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("Discard", style = MaterialTheme.typography.labelMedium, color = BroadcastSilver)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Resumable Live Auction / Retention Room Quick Banner
+            if (resumableRoom != null && (resumableRoom.roomStatus == RoomStatus.AUCTION || resumableRoom.roomStatus == RoomStatus.RETENTION)) {
+                item {
+                    Surface(
+                        color = AuctionGold.copy(alpha = 0.14f),
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.2.dp, AuctionGold.copy(alpha = 0.7f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable { onOpenRoom(resumableRoom.roomCode) }
+                            .testTag("resume_auction_room_banner")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(Icons.Filled.Gavel, contentDescription = null, tint = AuctionGold, modifier = Modifier.size(22.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = if (resumableRoom.roomStatus == RoomStatus.RETENTION) {
+                                        "RESUME RETENTION ROOM ${resumableRoom.roomCode}"
+                                    } else {
+                                        "RESUME LIVE AUCTION • ROOM ${resumableRoom.roomCode}"
+                                    },
+                                    style = MaterialTheme.typography.labelLarge.copy(
+                                        color = AuctionGold,
+                                        fontWeight = FontWeight.ExtraBold
+                                    )
+                                )
+                                Text(
+                                    text = "${resumableRoom.teams.size} Teams • Progress auto-saved",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = BroadcastSilver
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = "Resume Auction",
+                                tint = AuctionGold
+                            )
+                        }
+                    }
+                }
+            }
+
             // International Cricket Entry Card (T20I • ODI • Test • Series & World Cup)
             item {
                 Surface(
@@ -421,6 +572,64 @@ fun HomeLobbyScreen(
                             imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                             contentDescription = "Open Career Mode",
                             tint = AuctionGold
+                        )
+                    }
+                }
+            }
+
+            // Trophy Cabinet & Season Awards Entry Card
+            item {
+                Surface(
+                    color = NavySurface,
+                    shape = RoundedCornerShape(18.dp),
+                    border = BorderStroke(1.2.dp, TurfEmerald.copy(alpha = 0.55f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .clickable(onClick = onOpenTrophyCabinet)
+                        .testTag("open_trophy_cabinet_button")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            color = TurfEmerald.copy(alpha = 0.16f),
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, TurfEmerald.copy(alpha = 0.45f)),
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Filled.MilitaryTech,
+                                    contentDescription = "Trophy Cabinet",
+                                    tint = TurfEmerald,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "TROPHY CABINET & SEASON CAPS",
+                                style = MaterialTheme.typography.titleSmall.copy(
+                                    fontFamily = DisplayFontFamily,
+                                    letterSpacing = 0.8.sp,
+                                    color = BroadcastWhite
+                                )
+                            )
+                            Text(
+                                text = "${trophyCabinet.championshipsWon} Titles Won • ${trophyCabinet.finalsPlayed} Finals • Orange / Purple Cap & MVP",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = BroadcastSilver
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = "Open Trophy Cabinet",
+                            tint = TurfEmerald
                         )
                     }
                 }

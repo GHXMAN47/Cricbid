@@ -570,6 +570,7 @@ private fun CareerDashboardContent(
                                 CareerDifficulty.EASY -> drill.fatigueDelta - 6
                                 CareerDifficulty.NORMAL -> drill.fatigueDelta
                                 CareerDifficulty.HARD -> (drill.fatigueDelta + 6).coerceAtMost(-24)
+                                CareerDifficulty.LEGEND -> (drill.fatigueDelta + 10).coerceAtMost(-20)
                             }
                         } else {
                             (drill.fatigueDelta * career.difficulty.fatigueMultiplier).toInt().coerceAtLeast(6)

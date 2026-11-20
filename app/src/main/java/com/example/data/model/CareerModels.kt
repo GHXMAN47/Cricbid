@@ -45,6 +45,17 @@ enum class CareerDifficulty(
         fatigueMultiplier = 1.25,
         injuryRiskMultiplier = 1.65,
         injuryFatigueThreshold = 68
+    ),
+    LEGEND(
+        label = "Legend",
+        shortBadge = "LEGEND",
+        summary = "Elite AI (+10 OVR) • 0.65× XP • +1 Drill • Brutal Fitness & Injury Test",
+        opponentRatingOffset = 10,
+        xpMultiplier = 0.65,
+        drillAttrGain = 1,
+        fatigueMultiplier = 1.38,
+        injuryRiskMultiplier = 1.95,
+        injuryFatigueThreshold = 62
     );
 
     companion object {

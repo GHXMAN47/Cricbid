@@ -40,6 +40,7 @@ data class BatterScoreEntry(
     val out: Boolean = false,
     val injured: Boolean = false,
     val isCaptain: Boolean = false,
+    val confidence: Int = 40,
     val dismissalText: String = "not out"
 ) {
     val strikeRate: Double
@@ -148,7 +149,11 @@ data class InningsState(
     val fallOfWickets: List<FallOfWicket> = emptyList(),
     val recentBalls: List<BallEvent> = emptyList(),
     val injuredPlayerIds: Set<String> = emptySet(),
-    val completed: Boolean = false
+    val completed: Boolean = false,
+    val battingTeamReviewsRemaining: Int = 2,
+    val bowlingTeamReviewsRemaining: Int = 2,
+    val wagonWheelShots: List<ShotTelemetry> = emptyList(),
+    val pitchMapPoints: List<PitchMapPoint> = emptyList()
 ) {
     val oversFormatted: String
         get() = "${legalBalls / 6}.${legalBalls % 6}"
@@ -193,6 +198,9 @@ data class InningsState(
     val currentBowlerStamina: Int
         get() = bowlingCard.getOrNull(currentBowlerIdx)?.stamina ?: 100
 
+    val currentBatterConfidence: Int
+        get() = battingCard.getOrNull(strikerIdx)?.confidence ?: 40
+
     /**
      * Returns null if this bowler is strictly eligible to bowl the next over,
      * otherwise a short human-readable block reason.
@@ -213,6 +221,11 @@ data class LiveMatchState(
     val format: MatchFormat = MatchFormat.T20I,
     val stage: MatchStage = MatchStage.LEAGUE,
     val pitchCondition: String = "Balanced Deck",
+    val pitchType: PitchType = PitchType.BALANCED,
+    val weatherCondition: WeatherCondition = WeatherCondition.CLEAR_NIGHT,
+    val dewFactor2ndInnings: Boolean = false,
+    val fieldPreset: FieldPreset = FieldPreset.BALANCED,
+    val pendingDrs: DrsPendingDecision? = null,
     val tossSummary: String = "",
     val teamA: TeamState,
     val teamB: TeamState,
@@ -246,6 +259,9 @@ data class LiveMatchState(
 
     val isSuperOverActive: Boolean
         get() = superOverRound > 0 && !finished
+
+    val isDewActiveNow: Boolean
+        get() = dewFactor2ndInnings && activeInningsNumber == 2 && !isSuperOverActive && !finished
 
     val activeSuperOverInnings: SuperOverInnings?
         get() = if (!isSuperOverActive) null else if (activeSuperOverInningsNumber == 1) superOverInnings1 else superOverInnings2
@@ -302,6 +318,7 @@ data class LiveMatchState(
             playerOfTheMatch = playerOfTheMatch.ifBlank { "Match Star" }.take(115),
             innings1Worm = innings1.wormByOver.map { it.toLong() },
             innings2Worm = innings2.wormByOver.map { it.toLong() },
+            playerPerformances = SeasonAwardsEngine.extractPerformances(this),
             status = "COMPLETED"
         )
     }
@@ -354,7 +371,10 @@ object MatchSimulationEngine {
         stage: MatchStage = MatchStage.LEAGUE,
         format: MatchFormat = MatchFormat.T20I,
         random: Random = Random.Default,
-        teamBRatingOffset: Int = 0
+        teamBRatingOffset: Int = 0,
+        pitchType: PitchType? = null,
+        weatherCondition: WeatherCondition? = null,
+        dewFactor2ndInnings: Boolean? = null
     ): LiveMatchState {
         val xiA = resolvePlayingXi(teamA)
         val rawXiB = resolvePlayingXi(teamB)
@@ -377,11 +397,10 @@ object MatchSimulationEngine {
         val resolvedTeamB = teamB.copy(playingXiIds = xiB.map { it.id }, captainPlayerId = capBId)
         val chemA = calculateTeamChemistry(xiA)
         val chemB = calculateTeamChemistry(xiB)
-        val pitch = when (format) {
-            MatchFormat.T20I -> pitchPresetsT20.random(random)
-            MatchFormat.ODI -> pitchPresetsOdi.random(random)
-            MatchFormat.TEST -> pitchPresetsTest.random(random)
-        }
+        val resolvedPitch = pitchType ?: PitchType.entries.random(random)
+        val resolvedWeather = weatherCondition ?: WeatherCondition.entries.random(random)
+        val resolvedDew = dewFactor2ndInnings ?: (format != MatchFormat.TEST && random.nextDouble() < resolvedWeather.dewLikelihood)
+        val pitchLabel = buildPitchConditionLabel(resolvedPitch, resolvedWeather, resolvedDew)
         val tossSummary = if (random.nextBoolean()) {
             "🪙 Toss: ${teamA.teamName} ($capAName (C)) won the toss & chose to bat first vs $capBName (C)"
         } else {
@@ -392,7 +411,11 @@ object MatchSimulationEngine {
         return LiveMatchState(
             format = format,
             stage = stage,
-            pitchCondition = pitch,
+            pitchCondition = pitchLabel,
+            pitchType = resolvedPitch,
+            weatherCondition = resolvedWeather,
+            dewFactor2ndInnings = resolvedDew,
+            fieldPreset = FieldPreset.BALANCED,
             tossSummary = tossSummary,
             teamA = resolvedTeamA,
             teamB = resolvedTeamB,
@@ -404,6 +427,182 @@ object MatchSimulationEngine {
             innings2 = innings2,
             activeInningsNumber = 1
         )
+    }
+
+    fun buildPitchConditionLabel(pitch: PitchType, weather: WeatherCondition, dew: Boolean): String {
+        val dewTag = if (dew) " • 2nd-Inn Dew" else ""
+        return "${pitch.label} • ${weather.shortLabel}$dewTag"
+    }
+
+    fun updatePreMatchConditions(
+        state: LiveMatchState,
+        pitchType: PitchType,
+        weatherCondition: WeatherCondition,
+        dewFactor2ndInnings: Boolean
+    ): LiveMatchState {
+        return state.copy(
+            pitchType = pitchType,
+            weatherCondition = weatherCondition,
+            dewFactor2ndInnings = dewFactor2ndInnings,
+            pitchCondition = buildPitchConditionLabel(pitchType, weatherCondition, dewFactor2ndInnings)
+        )
+    }
+
+    fun setFieldPreset(state: LiveMatchState, preset: FieldPreset): LiveMatchState {
+        return state.copy(fieldPreset = preset)
+    }
+
+    fun dismissPendingDrs(state: LiveMatchState): LiveMatchState {
+        return state.copy(pendingDrs = null)
+    }
+
+    /**
+     * Resolves an active DRS review:
+     * - Overturned OUT -> restores batter at crease, rolls back wicket/FOW/bowler wicket, retains review!
+     * - Overturned NOT OUT -> awards wicket to bowler, updates FOW/next batter, retains review!
+     * - Umpire's Call -> original decision stands, reviewing team RETAINS their review!
+     * - Decision Upheld -> original decision stands, reviewing team LOSES 1 review!
+     */
+    fun resolveDrsReview(state: LiveMatchState): LiveMatchState {
+        val drs = state.pendingDrs ?: return state
+        val inn = if (drs.inningsNumber == 1) state.innings1 else state.innings2
+        val deductReview = !drs.overturned && !drs.umpiresCall
+
+        var updatedInn = inn.copy(
+            battingTeamReviewsRemaining = if (drs.isBattingTeamReview && deductReview) {
+                (inn.battingTeamReviewsRemaining - 1).coerceAtLeast(0)
+            } else inn.battingTeamReviewsRemaining,
+            bowlingTeamReviewsRemaining = if (!drs.isBattingTeamReview && deductReview) {
+                (inn.bowlingTeamReviewsRemaining - 1).coerceAtLeast(0)
+            } else inn.bowlingTeamReviewsRemaining
+        )
+
+        val verdictHeadline: String
+        if (drs.originalDecisionOut && drs.overturned) {
+            // Restore dismissed batter back to the crease
+            val restoredIdx = updatedInn.battingCard.indexOfFirst { it.playerId == drs.batterId }
+            val newBatCard = updatedInn.battingCard.toMutableList()
+            val newBowlCard = updatedInn.bowlingCard.toMutableList()
+            var nextStriker = updatedInn.strikerIdx
+            var nextInLine = updatedInn.nextBatterIdx
+
+            if (restoredIdx >= 0) {
+                // Demote newly entered batter if they haven't faced a ball yet
+                if (nextStriker != restoredIdx && nextStriker in newBatCard.indices && newBatCard[nextStriker].balls == 0) {
+                    newBatCard[nextStriker] = newBatCard[nextStriker].copy(dismissalText = "yet to bat")
+                    nextInLine = (nextInLine - 1).coerceAtLeast(restoredIdx + 1)
+                }
+                newBatCard[restoredIdx] = newBatCard[restoredIdx].copy(
+                    out = false,
+                    dismissalText = "batting",
+                    confidence = (newBatCard[restoredIdx].confidence + 8).coerceAtMost(100)
+                )
+                nextStriker = restoredIdx
+            }
+
+            val bowlerIdx = newBowlCard.indexOfFirst { it.playerName.removeSuffix(" (IP)") == drs.bowlerName }
+            if (bowlerIdx >= 0 && newBowlCard[bowlerIdx].wickets > 0) {
+                newBowlCard[bowlerIdx] = newBowlCard[bowlerIdx].copy(wickets = newBowlCard[bowlerIdx].wickets - 1)
+            }
+            val updatedFow = if (updatedInn.fallOfWickets.isNotEmpty() && updatedInn.fallOfWickets.last().batterName == drs.batterName) {
+                updatedInn.fallOfWickets.dropLast(1)
+            } else updatedInn.fallOfWickets
+
+            updatedInn = updatedInn.copy(
+                wickets = (updatedInn.wickets - 1).coerceAtLeast(0),
+                strikerIdx = nextStriker,
+                nextBatterIdx = nextInLine,
+                battingCard = newBatCard,
+                bowlingCard = newBowlCard,
+                fallOfWickets = updatedFow,
+                wicketOvers = updatedInn.wicketOvers.dropLast(1),
+                completed = false
+            )
+            verdictHeadline = "📺 DRS OVERTURNED — NOT OUT! ${drs.batterName} survives (${drs.mode.label}) • Review Retained!"
+        } else if (!drs.originalDecisionOut && drs.overturned) {
+            // Bowling review successful: dismiss the batter!
+            val targetIdx = updatedInn.battingCard.indexOfFirst { it.playerId == drs.batterId }
+            val newBatCard = updatedInn.battingCard.toMutableList()
+            val newBowlCard = updatedInn.bowlingCard.toMutableList()
+            var nextStriker = updatedInn.strikerIdx
+            var nextInLine = updatedInn.nextBatterIdx
+            val newWickets = (updatedInn.wickets + 1).coerceAtMost(10)
+
+            if (targetIdx >= 0) {
+                newBatCard[targetIdx] = newBatCard[targetIdx].copy(
+                    out = true,
+                    dismissalText = drs.dismissalLabel
+                )
+                if (nextInLine < updatedInn.battingLineup.size) {
+                    if (nextStriker == targetIdx) {
+                        nextStriker = nextInLine
+                    }
+                    newBatCard[nextInLine] = newBatCard[nextInLine].copy(dismissalText = "batting")
+                    nextInLine += 1
+                }
+            }
+            val bowlerIdx = newBowlCard.indexOfFirst { it.playerName.removeSuffix(" (IP)") == drs.bowlerName }
+            if (bowlerIdx >= 0) {
+                newBowlCard[bowlerIdx] = newBowlCard[bowlerIdx].copy(wickets = newBowlCard[bowlerIdx].wickets + 1)
+            }
+            val newFow = updatedInn.fallOfWickets + FallOfWicket(
+                wicketNumber = newWickets,
+                scoreAtFall = updatedInn.totalRuns,
+                overLabel = drs.overLabel,
+                batterName = drs.batterName
+            )
+            val allOut = newWickets >= 10
+            updatedInn = updatedInn.copy(
+                wickets = newWickets,
+                partnershipRuns = 0,
+                strikerIdx = nextStriker,
+                nextBatterIdx = nextInLine,
+                battingCard = newBatCard,
+                bowlingCard = newBowlCard,
+                fallOfWickets = newFow,
+                wicketOvers = updatedInn.wicketOvers + ((updatedInn.legalBalls - 1).coerceAtLeast(0) / 6 + 1),
+                completed = updatedInn.completed || allOut
+            )
+            verdictHeadline = "📺 DRS OVERTURNED — OUT! ${drs.batterName} ${drs.dismissalLabel} (${drs.mode.label}) • Review Retained!"
+        } else if (drs.umpiresCall) {
+            val call = if (drs.originalDecisionOut) "OUT" else "NOT OUT"
+            verdictHeadline = "📺 DRS UMPIRE'S CALL — $call stands (${drs.wicketsLabel}) • Review Retained!"
+        } else {
+            val call = if (drs.originalDecisionOut) "OUT" else "NOT OUT"
+            val left = if (drs.isBattingTeamReview) updatedInn.battingTeamReviewsRemaining else updatedInn.bowlingTeamReviewsRemaining
+            verdictHeadline = "📺 DRS UPHELD — $call (${drs.wicketsLabel}) • ${drs.reviewingTeamName} has $left review(s) left."
+        }
+
+        val drsEvent = BallEvent(
+            inningsNumber = drs.inningsNumber,
+            overLabel = drs.overLabel,
+            batterName = drs.batterName,
+            bowlerName = drs.bowlerName,
+            runsScored = 0,
+            outcome = if ((!drs.originalDecisionOut && drs.overturned) || (drs.originalDecisionOut && !drs.overturned)) {
+                BallOutcomeType.WICKET
+            } else BallOutcomeType.DOT,
+            commentary = verdictHeadline,
+            scoreAfterBall = "${updatedInn.totalRuns}/${updatedInn.wickets} (${updatedInn.oversFormatted})"
+        )
+
+        val nextFeed = (listOf(drsEvent) + state.commentaryFeed).take(220)
+        return if (drs.inningsNumber == 1) {
+            val advanceTo2 = updatedInn.completed
+            state.copy(
+                innings1 = updatedInn,
+                activeInningsNumber = if (advanceTo2) 2 else state.activeInningsNumber,
+                pendingDrs = null,
+                commentaryFeed = nextFeed
+            )
+        } else {
+            val updated = state.copy(
+                innings2 = updatedInn,
+                pendingDrs = null,
+                commentaryFeed = nextFeed
+            )
+            if (updatedInn.completed && !updated.finished) finalizeOrTriggerSuperOver(updated, Random.Default) else updated
+        }
     }
 
     /**
@@ -682,10 +881,14 @@ object MatchSimulationEngine {
         val overLabel = "$overNumber.$ballInOver"
 
         val bowlerEntryBefore = current.bowlingCard[current.currentBowlerIdx]
+        val batterEntryBefore = current.battingCard[current.strikerIdx]
+        val activePreset = interactiveInput?.fieldPreset ?: state.fieldPreset
+        val dewActive = state.dewFactor2ndInnings && state.activeInningsNumber == 2
+
         val staminaPenalty = when {
-            format == MatchFormat.TEST && bowlerEntryBefore.stamina < 30 -> -14
-            format == MatchFormat.TEST && bowlerEntryBefore.stamina < 45 -> -8
-            format == MatchFormat.ODI && bowlerEntryBefore.stamina < 40 -> -5
+            bowlerEntryBefore.stamina < 30 -> if (format == MatchFormat.TEST) -14 else -10
+            bowlerEntryBefore.stamina < 45 -> if (format == MatchFormat.TEST) -8 else -6
+            bowlerEntryBefore.stamina < 60 -> -3
             else -> 0
         }
 
@@ -709,12 +912,18 @@ object MatchSimulationEngine {
             }
         }
 
-        val pitchBatMod = when (state.pitchCondition) {
-            "Batting Paradise" -> 0.04
-            "Seam & Bounce", "Green Seamer" -> if (bowler.role == PlayerRole.SEAMER) -0.045 else 0.0
-            "Spin-Friendly Turn", "Dusty Day-4 Turner" -> if (bowler.role == PlayerRole.SPINNER) -0.05 else 0.0
-            else -> 0.0
+        val pitchBowlBonus = when (bowler.role) {
+            PlayerRole.SEAMER -> state.pitchType.seamBonus + state.weatherCondition.swingBonus
+            PlayerRole.SPINNER -> state.pitchType.spinBonus
+            else -> (state.pitchType.seamBonus + state.pitchType.spinBonus) / 3
         }
+        val dewBowlPenalty = if (dewActive) {
+            if (bowler.role == PlayerRole.SPINNER) -6 else -3
+        } else 0
+        val dewBatBoost = if (dewActive) 0.032 else 0.0
+        val confidenceBatBonus = ((batterEntryBefore.confidence - 40) / 60.0 * 0.045).coerceIn(-0.02, 0.045)
+
+        val pitchBatMod = state.pitchType.batMod + dewBatBoost + confidenceBatBonus
         val chemEdge = (current.battingChemistry - current.bowlingChemistry) / 300.0
         val partnershipMomentum = if (current.partnershipRuns >= 35) 0.025 else 0.0
 
@@ -726,7 +935,7 @@ object MatchSimulationEngine {
             ((rrr - parRate) / 10.0).coerceIn(-0.15, 0.35)
         } else 0.0
 
-        val effectiveBowlRating = (bowler.bowlingRating + phaseBowlingBonus + staminaPenalty).coerceIn(45, 99)
+        val effectiveBowlRating = (bowler.bowlingRating + phaseBowlingBonus + pitchBowlBonus + staminaPenalty + dewBowlPenalty).coerceIn(42, 99)
         val baseRatingDiff = ((batter.battingRating - effectiveBowlRating) / 100.0) + chemEdge + pitchBatMod + partnershipMomentum
         val interactiveRatingShift = when (interactiveInput?.role) {
             InteractivePlayRole.BATTING -> interactiveInput.timingGrade.batEdge + if (interactiveInput.shotDirection.isLofted) 0.07 else 0.0
@@ -743,7 +952,10 @@ object MatchSimulationEngine {
             fieldingFactor = fieldingFactor,
             chasePressure = chasePressure,
             random = random,
-            interactiveInput = interactiveInput
+            interactiveInput = interactiveInput,
+            fieldPreset = activePreset,
+            dewActive = dewActive,
+            lowBowlerStamina = bowlerEntryBefore.stamina < 45
         )
 
         val isExtra = outcome == BallOutcomeType.WIDE || outcome == BallOutcomeType.NO_BALL
@@ -769,24 +981,47 @@ object MatchSimulationEngine {
         } else {
             strikerEntry.dismissalText
         }
+        val timingConfidenceBonus = when {
+            interactiveInput?.role == InteractivePlayRole.BATTING && interactiveInput.timingGrade == TimingGrade.PERFECT -> 8
+            interactiveInput?.role == InteractivePlayRole.BATTING && interactiveInput.timingGrade == TimingGrade.GOOD -> 4
+            interactiveInput?.role == InteractivePlayRole.BATTING &&
+                (interactiveInput.timingGrade == TimingGrade.EARLY || interactiveInput.timingGrade == TimingGrade.LATE) -> -4
+            else -> 0
+        }
+        val outcomeConfidenceDelta = when (outcome) {
+            BallOutcomeType.SIX -> 16
+            BallOutcomeType.FOUR -> 12
+            BallOutcomeType.TRIPLE -> 8
+            BallOutcomeType.DOUBLE -> 6
+            BallOutcomeType.SINGLE -> 4
+            BallOutcomeType.DOT -> -3
+            else -> 0
+        }
+        val updatedConfidence = (strikerEntry.confidence + outcomeConfidenceDelta + timingConfidenceBonus).coerceIn(15, 100)
+
         updatedBattingCard[current.strikerIdx] = strikerEntry.copy(
             runs = strikerEntry.runs + if (isExtra) 0 else runsFromBall,
             balls = strikerEntry.balls + if (outcome == BallOutcomeType.WIDE) 0 else 1,
             fours = strikerEntry.fours + if (outcome == BallOutcomeType.FOUR) 1 else 0,
             sixes = strikerEntry.sixes + if (outcome == BallOutcomeType.SIX) 1 else 0,
             out = outcome == BallOutcomeType.WICKET,
+            confidence = updatedConfidence,
             dismissalText = if (outcome == BallOutcomeType.WICKET) dismissalDesc else "batting"
         )
 
         val updatedBowlingCard = current.bowlingCard.toMutableList()
         val updatedOverRuns = bowlerEntryBefore.currentOverRuns + runsFromBall
         val completedThisOver = !isExtra && (newLegalBalls % 6 == 0)
+        val isDeathPhase = (format == MatchFormat.T20I && overNumber >= 15) || (format == MatchFormat.ODI && overNumber >= 40)
         val staminaDrain = if (completedThisOver) {
-            when (format) {
-                MatchFormat.TEST -> if (bowler.role == PlayerRole.SEAMER) 13 else 8
-                MatchFormat.ODI -> if (bowler.role == PlayerRole.SEAMER) 5 else 3
-                MatchFormat.T20I -> 2
+            val baseDrain = when (format) {
+                MatchFormat.TEST -> if (bowler.role == PlayerRole.SEAMER) 15 else 9
+                MatchFormat.ODI -> if (bowler.role == PlayerRole.SEAMER) 10 else 6
+                MatchFormat.T20I -> if (bowler.role == PlayerRole.SEAMER) 14 else 9
             }
+            val deathExtra = if (isDeathPhase) 7 else 0
+            val workloadExtra = if (bowlerEntryBefore.legalBalls >= 12) 4 else 0
+            baseDrain + deathExtra + workloadExtra
         } else 0
 
         updatedBowlingCard[current.currentBowlerIdx] = bowlerEntryBefore.copy(
@@ -795,12 +1030,16 @@ object MatchSimulationEngine {
             wickets = bowlerEntryBefore.wickets + if (outcome == BallOutcomeType.WICKET) 1 else 0,
             maidens = bowlerEntryBefore.maidens + if (completedThisOver && updatedOverRuns == 0) 1 else 0,
             currentOverRuns = if (completedThisOver) 0 else updatedOverRuns,
-            stamina = (bowlerEntryBefore.stamina - staminaDrain).coerceIn(15, 100)
+            stamina = (bowlerEntryBefore.stamina - staminaDrain).coerceIn(18, 100)
         )
 
-        // Recover resting bowlers' stamina at end of over
-        if (completedThisOver && format != MatchFormat.T20I) {
-            val recovery = if (format == MatchFormat.TEST) 12 else 6
+        // Recover resting bowlers' stamina cleanly at end of every over across all formats
+        if (completedThisOver) {
+            val recovery = when (format) {
+                MatchFormat.TEST -> 12
+                MatchFormat.ODI -> 8
+                MatchFormat.T20I -> 7
+            }
             for (idx in updatedBowlingCard.indices) {
                 if (idx != current.currentBowlerIdx && !updatedBowlingCard[idx].injured) {
                     val b = updatedBowlingCard[idx]
@@ -963,6 +1202,77 @@ object MatchSimulationEngine {
 
         val newEvents = if (injuryEvent != null) listOf(injuryEvent, event) else listOf(event)
 
+        // Lightweight Wagon Wheel & Pitch Map telemetry recording
+        val newWagonShots = if (!isExtra && runsFromBall > 0) {
+            val baseAngle = when (interactiveInput?.shotDirection) {
+                ShotDirection.OFF_DRIVE -> -48f + (random.nextFloat() - 0.5f) * 44f
+                ShotDirection.STRAIGHT -> (random.nextFloat() - 0.5f) * 34f
+                ShotDirection.LEG_GLANCE -> 58f + (random.nextFloat() - 0.5f) * 56f
+                ShotDirection.LOFTED -> (random.nextFloat() - 0.5f) * 110f
+                null -> (random.nextFloat() * 340f) - 170f
+            }
+            val dist = when (outcome) {
+                BallOutcomeType.SIX -> 1.03f
+                BallOutcomeType.FOUR -> 0.94f
+                BallOutcomeType.TRIPLE -> 0.78f
+                BallOutcomeType.DOUBLE -> 0.64f
+                else -> 0.44f + random.nextFloat() * 0.22f
+            }
+            (current.wagonWheelShots + ShotTelemetry(
+                batterId = batter.id,
+                batterName = batter.name,
+                angleDeg = baseAngle,
+                distanceRatio = dist,
+                runs = runsFromBall,
+                overLabel = overLabel
+            )).takeLast(140)
+        } else current.wagonWheelShots
+
+        val pitchY = when (interactiveInput?.deliveryType) {
+            DeliveryType.YORKER -> 0.08f + random.nextFloat() * 0.08f
+            DeliveryType.BOUNCER -> 0.78f + random.nextFloat() * 0.16f
+            DeliveryType.GOOD_LENGTH -> 0.44f + random.nextFloat() * 0.16f
+            DeliveryType.SLOWER -> 0.34f + random.nextFloat() * 0.22f
+            DeliveryType.SPIN_TURN -> 0.36f + random.nextFloat() * 0.22f
+            null -> random.nextFloat().coerceIn(0.06f, 0.92f)
+        }
+        val pitchX = when {
+            outcome == BallOutcomeType.WIDE -> if (random.nextBoolean()) -0.92f else 0.92f
+            bowler.role == PlayerRole.SPINNER -> ((random.nextFloat() - 0.45f) * 1.1f).coerceIn(-0.85f, 0.85f)
+            else -> ((random.nextFloat() - 0.55f) * 1.0f).coerceIn(-0.85f, 0.85f)
+        }
+        val newPitchPoints = (current.pitchMapPoints + PitchMapPoint(
+            bowlerId = bowler.id,
+            bowlerName = bowler.name,
+            lineX = pitchX,
+            lengthY = pitchY,
+            outcome = outcome,
+            isSpin = bowler.role == PlayerRole.SPINNER,
+            overLabel = overLabel
+        )).takeLast(140)
+
+        // Generate a reviewable DRS decision on close LBW or caught-behind calls during interactive play
+        val generatedDrs: DrsPendingDecision? = if (interactiveInput != null && !inningsEnded) {
+            buildReviewableDrsIfClose(
+                outcome = outcome,
+                dismissalDesc = dismissalDesc,
+                inningsNumber = state.activeInningsNumber,
+                overLabel = overLabel,
+                batter = batter,
+                bowler = bowler,
+                battingTeamId = current.battingTeamId,
+                battingTeamName = current.battingTeamName,
+                bowlingTeamId = current.bowlingTeamId,
+                bowlingTeamName = current.bowlingTeamName,
+                battingReviewsLeft = current.battingTeamReviewsRemaining,
+                bowlingReviewsLeft = current.bowlingTeamReviewsRemaining,
+                interactiveRole = interactiveInput.role,
+                pitchX = pitchX,
+                pitchY = pitchY,
+                random = random
+            )
+        } else null
+
         val updatedInnings = current.copy(
             totalRuns = newTotalRuns,
             wickets = newWickets,
@@ -982,7 +1292,9 @@ object MatchSimulationEngine {
             fallOfWickets = updatedFow,
             recentBalls = (current.recentBalls + event).takeLast(12),
             injuredPlayerIds = updatedInjuredIds,
-            completed = inningsEnded
+            completed = inningsEnded,
+            wagonWheelShots = newWagonShots,
+            pitchMapPoints = newPitchPoints
         )
 
         val updatedFeed = (newEvents + state.commentaryFeed).take(220)
@@ -991,17 +1303,119 @@ object MatchSimulationEngine {
             state.copy(
                 innings1 = updatedInnings,
                 activeInningsNumber = if (inningsEnded) 2 else 1,
+                fieldPreset = activePreset,
+                pendingDrs = generatedDrs,
                 injuryAlerts = updatedInjuryAlerts.takeLast(4),
                 commentaryFeed = updatedFeed
             )
         } else {
             val nextState = state.copy(
                 innings2 = updatedInnings,
+                fieldPreset = activePreset,
+                pendingDrs = generatedDrs,
                 injuryAlerts = updatedInjuryAlerts.takeLast(4),
                 commentaryFeed = updatedFeed
             )
             if (inningsEnded) finalizeOrTriggerSuperOver(nextState, random) else nextState
         }
+    }
+
+    private fun buildReviewableDrsIfClose(
+        outcome: BallOutcomeType,
+        dismissalDesc: String,
+        inningsNumber: Int,
+        overLabel: String,
+        batter: Cricketer,
+        bowler: Cricketer,
+        battingTeamId: String,
+        battingTeamName: String,
+        bowlingTeamId: String,
+        bowlingTeamName: String,
+        battingReviewsLeft: Int,
+        bowlingReviewsLeft: Int,
+        interactiveRole: InteractivePlayRole,
+        pitchX: Float,
+        pitchY: Float,
+        random: Random
+    ): DrsPendingDecision? {
+        if (outcome == BallOutcomeType.WICKET && battingReviewsLeft > 0) {
+            val isLbw = dismissalDesc.startsWith("lbw", ignoreCase = true)
+            val isCaughtBehind = dismissalDesc.contains("c ", ignoreCase = true) && !dismissalDesc.contains("c & b", ignoreCase = true)
+            if (isLbw || (isCaughtBehind && random.nextDouble() < 0.55)) {
+                val mode = if (isLbw) DrsMode.BALL_TRACKING else DrsMode.ULTRA_EDGE
+                val roll = random.nextDouble()
+                val overturned = roll < 0.38
+                val umpiresCall = !overturned && roll < 0.58
+                val pitching = if (overturned && mode == DrsMode.BALL_TRACKING && random.nextBoolean()) "OUTSIDE LEG" else "IN LINE"
+                val impact = if (overturned && mode == DrsMode.BALL_TRACKING && pitching == "IN LINE") "OUTSIDE OFF" else "IN LINE"
+                val wickets = when {
+                    overturned && mode == DrsMode.BALL_TRACKING -> "MISSING STUMPS"
+                    overturned && mode == DrsMode.ULTRA_EDGE -> "FLAT LINE (NO EDGE)"
+                    umpiresCall -> "UMPIRE'S CALL"
+                    mode == DrsMode.ULTRA_EDGE -> "CLEAR SPIKE ON BAT"
+                    else -> "HITTING STUMPS"
+                }
+                return DrsPendingDecision(
+                    decisionId = System.nanoTime(),
+                    mode = mode,
+                    originalDecisionOut = true,
+                    overturned = overturned,
+                    umpiresCall = umpiresCall,
+                    reviewingTeamId = battingTeamId,
+                    reviewingTeamName = battingTeamName,
+                    isBattingTeamReview = true,
+                    batterId = batter.id,
+                    batterName = batter.name,
+                    bowlerName = bowler.name,
+                    dismissalLabel = dismissalDesc,
+                    pitchingLabel = pitching,
+                    impactLabel = impact,
+                    wicketsLabel = wickets,
+                    spikeIntensity = if (mode == DrsMode.ULTRA_EDGE && !overturned) 0.88f else 0.12f,
+                    ballPitchX = pitchX,
+                    ballPitchY = pitchY,
+                    inningsNumber = inningsNumber,
+                    overLabel = overLabel
+                )
+            }
+        } else if (outcome == BallOutcomeType.DOT && interactiveRole == InteractivePlayRole.BOWLING && bowlingReviewsLeft > 0 && random.nextDouble() < 0.16) {
+            // Close Not-Out appeal for bowling team to review (LBW or Caught-Behind edge)
+            val isLbwAppeal = random.nextBoolean()
+            val mode = if (isLbwAppeal) DrsMode.BALL_TRACKING else DrsMode.ULTRA_EDGE
+            val roll = random.nextDouble()
+            val overturned = roll < 0.42
+            val umpiresCall = !overturned && roll < 0.65
+            val wickets = when {
+                overturned && mode == DrsMode.BALL_TRACKING -> "3 REDS • HITTING!"
+                overturned && mode == DrsMode.ULTRA_EDGE -> "SHARP SPIKE • EDGED!"
+                umpiresCall -> "UMPIRE'S CALL"
+                mode == DrsMode.ULTRA_EDGE -> "NO SPIKE (FLAT)"
+                else -> "MISSING LEG STUMP"
+            }
+            return DrsPendingDecision(
+                decisionId = System.nanoTime(),
+                mode = mode,
+                originalDecisionOut = false,
+                overturned = overturned,
+                umpiresCall = umpiresCall,
+                reviewingTeamId = bowlingTeamId,
+                reviewingTeamName = bowlingTeamName,
+                isBattingTeamReview = false,
+                batterId = batter.id,
+                batterName = batter.name,
+                bowlerName = bowler.name,
+                dismissalLabel = if (isLbwAppeal) "lbw b ${bowler.name}" else "c †WK b ${bowler.name}",
+                pitchingLabel = "IN LINE",
+                impactLabel = if (overturned || umpiresCall) "IN LINE" else "OUTSIDE OFF",
+                wicketsLabel = wickets,
+                spikeIntensity = if (mode == DrsMode.ULTRA_EDGE && overturned) 0.92f else 0.10f,
+                ballPitchX = pitchX,
+                ballPitchY = pitchY,
+                inningsNumber = inningsNumber,
+                overLabel = overLabel
+            )
+        }
+        return null
     }
 
     /**
@@ -1385,10 +1799,13 @@ object MatchSimulationEngine {
         fieldingFactor: Double,
         chasePressure: Double,
         random: Random,
-        interactiveInput: InteractiveBallInput? = null
+        interactiveInput: InteractiveBallInput? = null,
+        fieldPreset: FieldPreset = FieldPreset.BALANCED,
+        dewActive: Boolean = false,
+        lowBowlerStamina: Boolean = false
     ): BallOutcomeType {
-        val pWide: Double
-        val pNoBall: Double
+        var pWide: Double
+        var pNoBall: Double
         var pWicket: Double
         var pSix: Double
         var pFour: Double
@@ -1485,6 +1902,21 @@ object MatchSimulationEngine {
                     }
                 }
             }
+        }
+
+        // Apply Field Preset, 2nd-Innings Dew, and Low Bowler Stamina tactical modifiers
+        pWicket = (pWicket + fieldPreset.wicketDelta).coerceIn(0.008, 0.26)
+        pFour = (pFour + fieldPreset.boundaryDelta * 0.65).coerceIn(0.018, 0.36)
+        pSix = (pSix + fieldPreset.boundaryDelta * 0.45).coerceIn(0.005, 0.34)
+        if (dewActive) {
+            pWide = (pWide + 0.014).coerceAtMost(0.07)
+            pFour = (pFour + 0.018).coerceAtMost(0.38)
+            pSix = (pSix + 0.012).coerceAtMost(0.36)
+        }
+        if (lowBowlerStamina) {
+            pWide = (pWide + 0.010).coerceAtMost(0.08)
+            pNoBall = (pNoBall + 0.006).coerceAtMost(0.03)
+            pFour = (pFour + 0.015).coerceAtMost(0.38)
         }
 
         val roll = random.nextDouble()

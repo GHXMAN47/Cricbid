@@ -74,6 +74,7 @@ import com.example.engine.ActionAnimationSnapshot
 import com.example.engine.BallEvent
 import com.example.engine.BallOutcomeType
 import com.example.engine.DeliveryType
+import com.example.engine.FieldPreset
 import com.example.engine.InningsState
 import com.example.engine.InteractiveBallInput
 import com.example.engine.InteractivePhaseResolver
@@ -81,11 +82,16 @@ import com.example.engine.InteractivePlayFilter
 import com.example.engine.InteractivePlayRole
 import com.example.engine.LiveMatchState
 import com.example.engine.MatchSimulationEngine
+import com.example.engine.PitchType
 import com.example.engine.ShotDirection
+import com.example.engine.WeatherCondition
 import com.example.ui.components.BallOutcomeChip
+import com.example.ui.components.DrsReviewOverlay
 import com.example.ui.components.MatchSoundEffects
+import com.example.ui.components.PitchMapChartCard
 import com.example.ui.components.RolePillBadge
 import com.example.ui.components.RunRateWormGraph
+import com.example.ui.components.WagonWheelChartCard
 import com.example.ui.theme.AuctionGold
 import com.example.ui.theme.BoundarySky
 import com.example.ui.theme.BroadcastMuted
@@ -130,8 +136,15 @@ fun MatchSimScreen(
     playFilter: InteractivePlayFilter = InteractivePlayFilter.BOTH,
     showPlayModeSetup: Boolean = false,
     autoSimmingSkippedPhase: Boolean = false,
-    onConfirmPlayModeSetup: (InteractivePlayFilter) -> Unit = {},
+    onConfirmPlayModeSetup: (InteractivePlayFilter, PitchType, WeatherCondition, Boolean) -> Unit = { _, _, _, _ -> },
     onChangePlayFilter: (InteractivePlayFilter) -> Unit = {},
+    showDrsOverlay: Boolean = false,
+    onSelectFieldPreset: (FieldPreset) -> Unit = {},
+    onStartDrsReview: () -> Unit = {},
+    onCompleteDrsReview: () -> Unit = {},
+    onDismissDrs: () -> Unit = {},
+    orangeCapPlayerId: String? = null,
+    purpleCapPlayerId: String? = null,
     modifier: Modifier = Modifier
 ) {
     BackHandler(onBack = onBack)
@@ -171,8 +184,10 @@ fun MatchSimScreen(
         }
     }
 
-    // Lightweight synthesized cricket sound effects with clean resource disposal
-    val soundEffects = remember { MatchSoundEffects() }
+    val context = LocalContext.current
+
+    // Lightweight synthesized cricket sound effects + haptics with clean resource disposal
+    val soundEffects = remember(context) { MatchSoundEffects(context) }
     LaunchedEffect(sfxMuted) {
         soundEffects.muted = sfxMuted
     }
@@ -181,7 +196,6 @@ fun MatchSimScreen(
     }
 
     // Optional Landscape Broadcast lock toggle (always restores UNSPECIFIED cleanly on exit)
-    val context = LocalContext.current
     DisposableEffect(preferLandscapeAction) {
         val activity = context.findActivity()
         if (preferLandscapeAction) {
@@ -255,7 +269,10 @@ fun MatchSimScreen(
                     onSimInnings = onSimInnings,
                     onToggleAutoPlay = onToggleAutoPlay,
                     onCycleSpeed = onCycleSpeed,
-                    onSimFullMatch = onSimFullMatch
+                    onSimFullMatch = onSimFullMatch,
+                    onSelectFieldPreset = onSelectFieldPreset,
+                    onStartDrsReview = onStartDrsReview,
+                    onDismissDrs = onDismissDrs
                 )
             } else {
                 Column(
@@ -387,8 +404,73 @@ fun MatchSimScreen(
                     LiveScorebugCard(
                         match = match,
                         activeInn = activeInn,
+                        orangeCapPlayerId = orangeCapPlayerId,
+                        purpleCapPlayerId = purpleCapPlayerId,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
                     )
+
+                    // DRS Review Prompt Banner (close LBW / Caught Behind decision)
+                    val pendingDrs = match.pendingDrs
+                    if (pendingDrs != null && !showDrsOverlay) {
+                        Surface(
+                            color = AuctionGold.copy(alpha = 0.14f),
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(1.4.dp, AuctionGold),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 4.dp)
+                                .testTag("portrait_drs_prompt_banner")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                val drsReviewsLeft = if (pendingDrs.isBattingTeamReview) activeInn.battingTeamReviewsRemaining else activeInn.bowlingTeamReviewsRemaining
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "DRS AVAILABLE • ${pendingDrs.dismissalLabel.uppercase()}",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            color = AuctionGold,
+                                            fontWeight = FontWeight.ExtraBold
+                                        )
+                                    )
+                                    Text(
+                                        text = "On-field: ${if (pendingDrs.originalDecisionOut) "OUT" else "NOT OUT"} (${pendingDrs.batterName}) • $drsReviewsLeft reviews left",
+                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                        color = BroadcastWhite,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Button(
+                                    onClick = onStartDrsReview,
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = AuctionGold,
+                                        contentColor = NavyMidnight
+                                    ),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .height(36.dp)
+                                        .testTag("drs_trigger_button")
+                                ) {
+                                    Text("Review", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold))
+                                }
+                                OutlinedButton(
+                                    onClick = onDismissDrs,
+                                    border = BorderStroke(1.dp, NavyOutline),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .height(36.dp)
+                                        .testTag("drs_dismiss_button")
+                                ) {
+                                    Text("Accept", style = MaterialTheme.typography.labelSmall, color = BroadcastSilver)
+                                }
+                            }
+                        }
+                    }
 
                     // Playback & Quick-Skip Controls Ribbon (when match not finished)
                     if (!match.finished) {
@@ -536,7 +618,8 @@ fun MatchSimScreen(
                                 onSelectShot = { selectedShot = it },
                                 onSelectDelivery = { selectedDelivery = it },
                                 onPlayInteractiveBall = onPlayInteractiveBall,
-                                onSimInnings = onSimInnings
+                                onSimInnings = onSimInnings,
+                                onSelectFieldPreset = onSelectFieldPreset
                             )
                             Spacer(Modifier.height(12.dp))
                         }
@@ -554,11 +637,23 @@ fun MatchSimScreen(
                             match = match,
                             selectedInnings = scorecardInningsTab,
                             onSelectInnings = { scorecardInningsTab = it },
+                            orangeCapPlayerId = orangeCapPlayerId,
+                            purpleCapPlayerId = purpleCapPlayerId,
                             modifier = Modifier.weight(1f)
                         )
                     }
                 }
             }
+        }
+
+        // Animated DRS Hawk-Eye Ball-Tracking / UltraEdge Overlay
+        val drsDecision = match.pendingDrs
+        if (showDrsOverlay && drsDecision != null) {
+            DrsReviewOverlay(
+                decision = drsDecision,
+                soundEffects = soundEffects,
+                onComplete = onCompleteDrsReview
+            )
         }
 
         // Pre-Match Play Mode Setup Overlay (Batting Only / Bowling Only / Both)
@@ -860,6 +955,8 @@ private fun ImpactSubBottomSheet(
 private fun LiveScorebugCard(
     match: LiveMatchState,
     activeInn: InningsState,
+    orangeCapPlayerId: String? = null,
+    purpleCapPlayerId: String? = null,
     modifier: Modifier = Modifier
 ) {
     val activeSo = match.activeSuperOverInnings
@@ -1064,18 +1161,30 @@ private fun LiveScorebugCard(
                     Column(modifier = Modifier.weight(1f)) {
                         strikerCard?.let {
                             val capTag = if (it.isCaptain) " (C)" else ""
+                            val orangeTag = if (orangeCapPlayerId != null && it.playerId == orangeCapPlayerId) " 🟠" else ""
+                            val confColor = when {
+                                it.confidence >= 75 -> TurfEmerald
+                                it.confidence >= 45 -> AuctionGold
+                                else -> BroadcastSilver
+                            }
                             Text(
-                                text = "🏏 ${it.playerName}$capTag*  ${it.runs}(${it.balls})",
+                                text = "🏏 ${it.playerName}$capTag$orangeTag*  ${it.runs}(${it.balls})",
                                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
                                 color = BroadcastWhite,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
+                            Text(
+                                text = "   Confidence ${it.confidence}%",
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily, fontSize = 10.sp),
+                                color = confColor
+                            )
                         }
                         nonStrikerCard?.let {
                             val capTag = if (it.isCaptain) " (C)" else ""
+                            val orangeTag = if (orangeCapPlayerId != null && it.playerId == orangeCapPlayerId) " 🟠" else ""
                             Text(
-                                text = "   ${it.playerName}$capTag  ${it.runs}(${it.balls})",
+                                text = "   ${it.playerName}$capTag$orangeTag  ${it.runs}(${it.balls})",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = BroadcastMuted,
                                 maxLines = 1,
@@ -1090,9 +1199,10 @@ private fun LiveScorebugCard(
                             else -> TurfEmerald
                         }
                         val bowlerCapTag = if (it.isCaptain) " (C)" else ""
+                        val purpleTag = if (purpleCapPlayerId != null && it.playerId == purpleCapPlayerId) " 🟣" else ""
                         Column(horizontalAlignment = Alignment.End) {
                             Text(
-                                text = "${it.playerName}$bowlerCapTag",
+                                text = "${it.playerName}$bowlerCapTag$purpleTag",
                                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
                                 color = BroadcastSilver
                             )
@@ -1100,33 +1210,35 @@ private fun LiveScorebugCard(
                                 text = "${it.wickets}-${it.runsConceded} (${it.oversFormatted})",
                                 style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily, color = WicketCrimson)
                             )
-                            if (match.format != MatchFormat.T20I) {
-                                Text(
-                                    text = "Stamina ${it.stamina}%",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
-                                    color = staminaColor
-                                )
-                            }
+                            Text(
+                                text = "Stamina ${it.stamina}%",
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
+                                color = staminaColor
+                            )
                         }
                     }
                 }
 
-                // Pomp-Style Pitch / Chemistry / Partnership Telemetry Strip
+                // Pomp-Style Pitch / Dew / DRS / Partnership Telemetry Strip
                 Spacer(Modifier.height(8.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    val dewLabel = if (match.isDewActiveNow) " • 💧DEW" else ""
                     Text(
-                        text = "${match.pitchCondition} • P'ship ${activeInn.partnershipRuns}",
+                        text = "${match.pitchType.shortLabel} • ${match.weatherCondition.label.split(" ").first()}$dewLabel • P'ship ${activeInn.partnershipRuns}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = BroadcastMuted
+                        color = if (match.isDewActiveNow) BoundarySky else BroadcastMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
                     )
                     Text(
-                        text = "Chem ${activeInn.battingChemistry} vs ${activeInn.bowlingChemistry}",
+                        text = "DRS ${activeInn.battingTeamReviewsRemaining}/${activeInn.bowlingTeamReviewsRemaining} • ${match.fieldPreset.shortLabel}",
                         style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
-                        color = BoundarySky
+                        color = AuctionGold
                     )
                 }
 
@@ -1369,9 +1481,12 @@ private fun ScorecardTabContent(
     match: LiveMatchState,
     selectedInnings: Int,
     onSelectInnings: (Int) -> Unit,
+    orangeCapPlayerId: String? = null,
+    purpleCapPlayerId: String? = null,
     modifier: Modifier = Modifier
 ) {
     val inn = if (selectedInnings == 1) match.innings1 else match.innings2
+    var subTab by rememberSaveable { mutableIntStateOf(0) } // 0 = Scorecard, 1 = Wagon Wheel, 2 = Pitch Map
 
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
@@ -1395,6 +1510,56 @@ private fun ScorecardTabContent(
             }
         }
 
+        // Sub-Tab Switcher: Scorecard | Wagon Wheel | Pitch Map
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(NavySurfaceHigh)
+                    .padding(3.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                SimTabButton(
+                    label = "Scorecard",
+                    selected = subTab == 0,
+                    onClick = { subTab = 0 },
+                    modifier = Modifier.weight(1f).testTag("subtab_scorecard")
+                )
+                SimTabButton(
+                    label = "Wagon Wheel",
+                    selected = subTab == 1,
+                    onClick = { subTab = 1 },
+                    modifier = Modifier.weight(1f).testTag("subtab_wagon_wheel")
+                )
+                SimTabButton(
+                    label = "Pitch Map",
+                    selected = subTab == 2,
+                    onClick = { subTab = 2 },
+                    modifier = Modifier.weight(1f).testTag("subtab_pitch_map")
+                )
+            }
+        }
+
+        if (subTab == 1) {
+            item {
+                WagonWheelChartCard(
+                    shots = inn.wagonWheelShots,
+                    batters = inn.battingCard,
+                    teamName = inn.battingTeamName
+                )
+            }
+        } else if (subTab == 2) {
+            item {
+                PitchMapChartCard(
+                    points = inn.pitchMapPoints,
+                    bowlers = inn.bowlingCard,
+                    teamName = inn.bowlingTeamName
+                )
+            }
+        }
+
+        if (subTab == 0) {
         // Batting Scorecard Table
         item {
             Surface(
@@ -1440,6 +1605,9 @@ private fun ScorecardTabContent(
                                     )
                                     if (entry.isCaptain) {
                                         CaptainTagBadge()
+                                    }
+                                    if (orangeCapPlayerId != null && entry.playerId == orangeCapPlayerId) {
+                                        CapLeaderBadge(label = "🟠", color = androidx.compose.ui.graphics.Color(0xFFFF8C00))
                                     }
                                 }
                                 Text(
@@ -1520,6 +1688,9 @@ private fun ScorecardTabContent(
                                 )
                                 if (bw.isCaptain) {
                                     CaptainTagBadge()
+                                }
+                                if (purpleCapPlayerId != null && bw.playerId == purpleCapPlayerId) {
+                                    CapLeaderBadge(label = "🟣", color = androidx.compose.ui.graphics.Color(0xFFA855F7))
                                 }
                             }
                             Text(bw.oversFormatted, style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily), color = BroadcastSilver, modifier = Modifier.width(34.dp))
@@ -1615,6 +1786,25 @@ private fun ScorecardTabContent(
                 }
             }
         }
+        }
+    }
+}
+
+@Composable
+private fun CapLeaderBadge(
+    label: String,
+    color: androidx.compose.ui.graphics.Color
+) {
+    Surface(
+        color = color.copy(alpha = 0.2f),
+        shape = RoundedCornerShape(4.dp),
+        border = BorderStroke(0.8.dp, color.copy(alpha = 0.7f))
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+            modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp)
+        )
     }
 }
 

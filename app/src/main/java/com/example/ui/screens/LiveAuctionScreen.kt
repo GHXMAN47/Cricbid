@@ -119,6 +119,8 @@ fun LiveAuctionScreen(
             currentHighestBidderTeamId = room.highestBidderTeamId
         )
     } else null
+    val isFormerRtmTarget = myTeam != null && player != null &&
+        SquadRuleValidator.isFormerPlayerForRtm(myTeam, player.id)
 
     Box(
         modifier = modifier
@@ -260,6 +262,35 @@ fun LiveAuctionScreen(
                                             color = AuctionGold
                                         )
                                     )
+                                    if (isFormerRtmTarget) {
+                                        Spacer(Modifier.height(6.dp))
+                                        Surface(
+                                            color = BoundarySky.copy(alpha = 0.18f),
+                                            shape = RoundedCornerShape(8.dp),
+                                            border = BorderStroke(1.dp, BoundarySky.copy(alpha = 0.65f))
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Filled.Bolt,
+                                                    contentDescription = null,
+                                                    tint = BoundarySky,
+                                                    modifier = Modifier.size(14.dp)
+                                                )
+                                                Spacer(Modifier.width(4.dp))
+                                                Text(
+                                                    text = "FORMER SQUAD • RTM ELIGIBLE",
+                                                    style = MaterialTheme.typography.labelSmall.copy(
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = BoundarySky,
+                                                        fontSize = 10.sp
+                                                    )
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
 
                                 Spacer(Modifier.width(12.dp))

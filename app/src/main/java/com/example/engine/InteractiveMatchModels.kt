@@ -142,18 +142,31 @@ enum class TimingGrade(
     companion object {
         /**
          * Evaluates the oscillating timing gauge needle in [0f, 1f].
-         * Sweet spot: 0.42..0.58 -> PERFECT
-         * Good zone:  0.26..0.74 -> GOOD
-         * < 0.26 -> EARLY, > 0.74 -> LATE
+         * Base sweet spot: 0.42..0.58 -> PERFECT; Good zone: 0.26..0.74 -> GOOD.
+         * High batter confidence (0..100) gently widens both the PERFECT and GOOD windows,
+         * while low bowler stamina slightly tightens the bowling sweet spot.
          */
-        fun fromGaugeCursor(cursor: Float): TimingGrade {
+        fun fromGaugeCursor(cursor: Float, sweetSpotHalfWidthBonus: Float = 0f): TimingGrade {
             val c = cursor.coerceIn(0f, 1f)
+            val bonus = sweetSpotHalfWidthBonus.coerceIn(-0.03f, 0.055f)
+            val perfectHalf = (0.08f + bonus).coerceIn(0.055f, 0.135f)
+            val goodHalf = (0.24f + bonus * 1.3f).coerceIn(0.19f, 0.31f)
             return when {
-                c in 0.42f..0.58f -> PERFECT
-                c in 0.26f..0.74f -> GOOD
-                c < 0.26f -> EARLY
+                c in (0.5f - perfectHalf)..(0.5f + perfectHalf) -> PERFECT
+                c in (0.5f - goodHalf)..(0.5f + goodHalf) -> GOOD
+                c < (0.5f - goodHalf) -> EARLY
                 else -> LATE
             }
+        }
+
+        fun confidenceWindowBonus(batterConfidence: Int): Float {
+            // Confidence 40 = 0 bonus; 100 = +0.05f wider PERFECT half-width; <25 = -0.015f
+            return ((batterConfidence - 40) / 60f * 0.05f).coerceIn(-0.015f, 0.05f)
+        }
+
+        fun staminaWindowPenalty(bowlerStamina: Int): Float {
+            // Stamina >= 60 = 0; Stamina 20 = -0.025f narrower sweet spot
+            return if (bowlerStamina >= 60) 0f else -((60 - bowlerStamina) / 40f * 0.025f).coerceIn(0f, 0.025f)
         }
     }
 }
@@ -205,14 +218,21 @@ enum class DeliveryType(
         lateralCurve = 0.14f,
         speedKph = 88,
         wicketBonus = 0.026
-    )
+    );
+
+    fun effectiveSpeedKph(bowlerStamina: Int, dewActive: Boolean): Int {
+        val staminaDrop = if (bowlerStamina < 60) ((60 - bowlerStamina) * 0.22f).toInt() else 0
+        val dewDrop = if (dewActive) 3 else 0
+        return (speedKph - staminaDrop - dewDrop).coerceAtLeast(72)
+    }
 }
 
 data class InteractiveBallInput(
     val role: InteractivePlayRole,
     val shotDirection: ShotDirection = ShotDirection.STRAIGHT,
     val deliveryType: DeliveryType = DeliveryType.GOOD_LENGTH,
-    val timingGrade: TimingGrade = TimingGrade.GOOD
+    val timingGrade: TimingGrade = TimingGrade.GOOD,
+    val fieldPreset: FieldPreset? = null
 )
 
 data class ActionAnimationSnapshot(
@@ -227,5 +247,8 @@ data class ActionAnimationSnapshot(
     val bowlerName: String,
     val overLabel: String,
     val isSuperOver: Boolean,
-    val isRedBall: Boolean
+    val isRedBall: Boolean,
+    val pitchType: PitchType = PitchType.BALANCED,
+    val dewActive: Boolean = false,
+    val fieldPreset: FieldPreset = FieldPreset.BALANCED
 )

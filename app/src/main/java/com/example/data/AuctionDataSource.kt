@@ -21,7 +21,9 @@ interface AuctionDataSource {
     suspend fun removeAiBot(roomCode: String, botTeamId: String): Result<Unit>
     suspend fun enterRetentionRound(roomCode: String): Result<Unit>
     suspend fun retainOrSkipMarquee(roomCode: String, teamId: String, playerId: String?): Result<Unit>
+    suspend fun submitMultiRetentions(roomCode: String, teamId: String, playerIds: List<String>): Result<Unit>
     suspend fun beginLiveAuctionFromRetention(roomCode: String): Result<Unit>
+    suspend fun startNewSeasonMegaAuction(roomCode: String): Result<Unit>
     suspend fun placeBid(roomCode: String, teamId: String): Result<Unit>
     suspend fun useRtmCard(roomCode: String, teamId: String): Result<Unit>
     suspend fun finalizeCurrentLot(roomCode: String): Result<Unit>

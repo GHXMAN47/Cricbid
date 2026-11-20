@@ -48,7 +48,9 @@ import androidx.compose.ui.unit.sp
 import com.example.engine.ActionAnimationSnapshot
 import com.example.engine.BallOutcomeType
 import com.example.engine.DeliveryType
+import com.example.engine.FieldPreset
 import com.example.engine.InteractivePlayRole
+import com.example.engine.PitchType
 import com.example.engine.ShotDirection
 import com.example.engine.TimingGrade
 import com.example.ui.theme.AuctionGold
@@ -80,6 +82,9 @@ fun CricketActionPitchCanvas(
     bowlerName: String,
     isRedBall: Boolean,
     soundEffects: MatchSoundEffects,
+    pitchType: PitchType = PitchType.BALANCED,
+    dewActive: Boolean = false,
+    fieldPreset: FieldPreset = FieldPreset.BALANCED,
     modifier: Modifier = Modifier
 ) {
     val haptic = LocalHapticFeedback.current
@@ -103,7 +108,7 @@ fun CricketActionPitchCanvas(
             targetValue = 0.54f,
             animationSpec = tween(durationMillis = 480, easing = LinearEasing)
         )
-        soundEffects.playOutcomeCue(snap.outcome)
+        soundEffects.playOutcomeCue(snap.outcome, snap.timingGrade)
         if (snap.outcome == BallOutcomeType.SIX || snap.outcome == BallOutcomeType.FOUR || snap.outcome == BallOutcomeType.WICKET) {
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
         }
@@ -253,7 +258,20 @@ fun CricketActionPitchCanvas(
                 )
             )
 
-            // 3. Perspective 22-Yard Cricket Pitch Strip
+            // Evening Dew sheen across outfield when 2nd-innings dew is active
+            if (dewActive) {
+                drawOval(
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color(0x2238BDF8), Color(0x0E7DD3FC), Color.Transparent),
+                        center = Offset(cx, h * 0.56f),
+                        radius = w * 0.54f
+                    ),
+                    topLeft = Offset(fieldLeft, fieldTop),
+                    size = Size(fieldW, fieldH)
+                )
+            }
+
+            // 3. Perspective 22-Yard Cricket Pitch Strip (tinted by PitchType!)
             val pitchTopY = h * 0.24f
             val pitchBotY = h * 0.86f
             val pitchTopHalfW = w * 0.042f
@@ -265,14 +283,35 @@ fun CricketActionPitchCanvas(
                 lineTo(cx - pitchBotHalfW, pitchBotY)
                 close()
             }
+            val pitchColors = when (pitchType) {
+                PitchType.GREEN -> listOf(Color(0xFF9AB87B), Color(0xFFB4CC91), Color(0xFF99B67A))
+                PitchType.DUSTY -> listOf(Color(0xFFD5B184), Color(0xFFC59B6D), Color(0xFFB5895A))
+                PitchType.FLAT -> listOf(Color(0xFFE3CEA8), Color(0xFFEDD9B6), Color(0xFFD9BE92))
+                PitchType.BALANCED -> listOf(Color(0xFFCBB082), Color(0xFFDFC79A), Color(0xFFC6A572))
+            }
             drawPath(
                 path = pitchPath,
                 brush = Brush.verticalGradient(
-                    colors = listOf(Color(0xFFCBB082), Color(0xFFDFC79A), Color(0xFFC6A572)),
+                    colors = pitchColors,
                     startY = pitchTopY,
                     endY = pitchBotY
                 )
             )
+            // Dry spin cracks on Dusty pitches
+            if (pitchType == PitchType.DUSTY) {
+                drawLine(
+                    color = Color(0x554E342E),
+                    start = Offset(cx - pitchTopHalfW * 0.35f, pitchTopY + (pitchBotY - pitchTopY) * 0.45f),
+                    end = Offset(cx + pitchBotHalfW * 0.22f, pitchTopY + (pitchBotY - pitchTopY) * 0.62f),
+                    strokeWidth = 1.5f
+                )
+                drawLine(
+                    color = Color(0x444E342E),
+                    start = Offset(cx + pitchTopHalfW * 0.3f, pitchTopY + (pitchBotY - pitchTopY) * 0.34f),
+                    end = Offset(cx - pitchBotHalfW * 0.25f, pitchTopY + (pitchBotY - pitchTopY) * 0.56f),
+                    strokeWidth = 1.2f
+                )
+            }
             // Bowling & Popping Creases
             val farCreaseY = pitchTopY + (pitchBotY - pitchTopY) * 0.12f
             val nearCreaseY = pitchBotY - (pitchBotY - pitchTopY) * 0.14f
@@ -341,7 +380,7 @@ fun CricketActionPitchCanvas(
             // 5. Far-End Stumps (Bowler End)
             drawStumps(cx = cx, baseY = pitchTopY + 10f, scale = 0.62f, shatteredProgress = 0f)
 
-            // 6. Animated Fielders (5 outfielders reacting toward ball landing zone)
+            // 6. Animated Fielders (9 dynamic outfielders positioned by active FieldPreset + Wicketkeeper!)
             val ballHitDirection = snapshot?.shotDirection ?: selectedShot
             val ballHitRad = Math.toRadians(ballHitDirection.angleDeg.toDouble())
             val chaseFactor = if (snapshot != null && t > 0.60f && snapshot.outcome != BallOutcomeType.WICKET && snapshot.outcome != BallOutcomeType.DOT) {
@@ -351,31 +390,33 @@ fun CricketActionPitchCanvas(
                 x = (cx + sin(ballHitRad).toFloat() * w * 0.34f).coerceIn(w * 0.12f, w * 0.88f),
                 y = (nearCreaseY - cos(ballHitRad).toFloat() * h * 0.44f).coerceIn(h * 0.20f, h * 0.76f)
             )
-            val fielderBases = listOf(
-                Offset(w * 0.20f, h * 0.46f), // Point / Cover
-                Offset(w * 0.31f, h * 0.29f), // Long-Off
-                Offset(w * 0.69f, h * 0.29f), // Long-On
-                Offset(w * 0.80f, h * 0.48f), // Mid-Wicket / Square Leg
-                Offset(w * 0.56f, h * 0.90f)  // Wicketkeeper behind stumps
-            )
-            fielderBases.forEachIndexed { idx, base ->
-                val isKeeper = idx == 4
-                val pos = if (!isKeeper && chaseFactor > 0f) {
+            val dynamicOutfielders = fieldPreset.fielderCoords.map { (fx, fy) ->
+                Offset(w * fx, h * fy)
+            }
+            dynamicOutfielders.forEach { base ->
+                val pos = if (chaseFactor > 0f) {
                     val dist = kotlin.math.hypot((landingTarget.x - base.x).toDouble(), (landingTarget.y - base.y).toDouble())
-                    if (dist < w * 0.32f) {
+                    if (dist < w * 0.28f) {
                         Offset(
-                            x = base.x + (landingTarget.x - base.x) * chaseFactor * 0.55f,
-                            y = base.y + (landingTarget.y - base.y) * chaseFactor * 0.55f
+                            x = base.x + (landingTarget.x - base.x) * chaseFactor * 0.52f,
+                            y = base.y + (landingTarget.y - base.y) * chaseFactor * 0.52f
                         )
                     } else base
                 } else base
                 drawFielderSprite(
                     center = pos,
-                    scale = if (isKeeper) 0.92f else 0.72f,
+                    scale = 0.66f,
                     jerseyColor = Color(0xFF1F6FEB),
-                    runningPhase = if (chaseFactor > 0f && !isKeeper) chaseFactor * 10f else 0f
+                    runningPhase = if (chaseFactor > 0f) chaseFactor * 10f else 0f
                 )
             }
+            // Wicketkeeper behind near stumps
+            drawFielderSprite(
+                center = Offset(w * 0.56f, h * 0.90f),
+                scale = 0.90f,
+                jerseyColor = Color(0xFF1F6FEB),
+                runningPhase = 0f
+            )
 
             // 7. Animated Bowler (Run-up 0..0.34, Release Leap 0.34..0.46, Follow-through 0.46..0.70)
             val runupT = (t / 0.36f).coerceIn(0f, 1f)

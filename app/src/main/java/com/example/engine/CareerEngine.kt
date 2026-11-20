@@ -171,6 +171,7 @@ object CareerEngine {
                 CareerDifficulty.EASY -> (drill.fatigueDelta - 6)
                 CareerDifficulty.NORMAL -> drill.fatigueDelta
                 CareerDifficulty.HARD -> (drill.fatigueDelta + 6).coerceAtMost(-24)
+                CareerDifficulty.LEGEND -> (drill.fatigueDelta + 10).coerceAtMost(-20)
             }
         }
         val newFatigue = (career.fatigue + scaledFatigueDelta).coerceIn(0, 100)
@@ -214,7 +215,7 @@ object CareerEngine {
             val injuryChance = (baseChance * diff.injuryRiskMultiplier).coerceIn(0.05, 0.72)
             if (rng.nextDouble() < injuryChance) {
                 injuredNow = true
-                newInjury = if (diff == CareerDifficulty.HARD && newFatigue >= 88) 2 else 1
+                newInjury = if ((diff == CareerDifficulty.HARD || diff == CareerDifficulty.LEGEND) && newFatigue >= 86) 2 else 1
                 newForm = (newForm - 6).coerceAtLeast(35)
             }
         }
@@ -462,7 +463,7 @@ object CareerEngine {
             hitCentury || tookFiveFor || isPotm -> 10
             hitFifty || tookThreeFor -> 6
             runs >= 25 || wickets >= 1 || userWon -> 2
-            else -> if (diff == CareerDifficulty.HARD) -6 else -4
+            else -> if (diff == CareerDifficulty.HARD || diff == CareerDifficulty.LEGEND) -6 else -4
         }
         val newForm = (career.form + formDelta).coerceIn(30, 100)
 
@@ -478,7 +479,7 @@ object CareerEngine {
         val matchInjuryThreshold = (diff.injuryFatigueThreshold + 8).coerceAtMost(94)
         val matchInjuryChance = (0.25 * diff.injuryRiskMultiplier).coerceIn(0.08, 0.55)
         if (newFatigue >= matchInjuryThreshold && rng.nextDouble() < matchInjuryChance) {
-            newInjury = if (diff == CareerDifficulty.HARD && newFatigue >= 92) 2 else 1
+            newInjury = if ((diff == CareerDifficulty.HARD || diff == CareerDifficulty.LEGEND) && newFatigue >= 90) 2 else 1
             injuredInMatch = true
         }
 
@@ -631,10 +632,10 @@ object CareerEngine {
 
     fun retireToHallOfFame(career: CareerSaveState): Pair<CareerSaveState, HallOfFameLegend> {
         val peakBoost = (career.peakOverall - career.overallRating).coerceAtLeast(0)
-        val finalAwards = if (career.difficulty == CareerDifficulty.HARD) {
-            (career.awards + "Hard Mode Veteran").distinct()
-        } else {
-            career.awards
+        val finalAwards = when (career.difficulty) {
+            CareerDifficulty.HARD -> (career.awards + "Hard Mode Veteran").distinct()
+            CareerDifficulty.LEGEND -> (career.awards + "Legend Mode Immortal").distinct()
+            else -> career.awards
         }
         val legend = HallOfFameLegend(
             id = career.id,

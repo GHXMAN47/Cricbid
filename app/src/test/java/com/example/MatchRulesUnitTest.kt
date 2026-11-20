@@ -846,6 +846,244 @@ class MatchRulesUnitTest {
             assertTrue("Bowler ${bowler.playerName} exceeded 4 overs during skipped innings auto-sim", bowler.legalBalls <= 24)
         }
     }
+
+    @Test
+    fun pitchDewConfidenceStaminaFieldPresetsAndTelemetryRecording() {
+        val (india, australia) = sampleTeams()
+        val base = MatchSimulationEngine.createMatch(
+            teamA = india,
+            teamB = australia,
+            stage = MatchStage.LEAGUE,
+            format = MatchFormat.T20I,
+            pitchType = com.example.engine.PitchType.FLAT,
+            weatherCondition = com.example.engine.WeatherCondition.CLEAR_NIGHT,
+            dewFactor2ndInnings = true,
+            random = Random(777L)
+        )
+        assertEquals(com.example.engine.PitchType.FLAT, base.pitchType)
+        assertFalse("Dew should not be active in 1st innings", base.isDewActiveNow)
+
+        // Field presets have 9 outfielder coordinates and update cleanly
+        val attacking = MatchSimulationEngine.setFieldPreset(base, com.example.engine.FieldPreset.ATTACKING)
+        assertEquals(com.example.engine.FieldPreset.ATTACKING, attacking.fieldPreset)
+        com.example.engine.FieldPreset.entries.forEach { preset ->
+            assertEquals("Field preset ${preset.name} must position 9 outfielders", 9, preset.fielderCoords.size)
+        }
+
+        // Confidence widens timing sweet-spot window; low stamina narrows it
+        val highConfBonus = com.example.engine.TimingGrade.confidenceWindowBonus(95)
+        val lowConfBonus = com.example.engine.TimingGrade.confidenceWindowBonus(20)
+        assertTrue("High batter confidence should widen timing window", highConfBonus > lowConfBonus)
+        val lowStaminaPenalty = com.example.engine.TimingGrade.staminaWindowPenalty(25)
+        assertTrue("Low bowler stamina should narrow bowling timing window", lowStaminaPenalty < 0f)
+
+        // Simulate 1st innings and verify wagon wheel, pitch map, stamina drain, and 2nd-innings dew activation
+        val afterInn1 = MatchSimulationEngine.simulateCurrentInnings(attacking, Random(777L))
+        assertTrue("Pitch map should record ball landing points", afterInn1.innings1.pitchMapPoints.isNotEmpty())
+        assertTrue("Wagon wheel should record scoring shots", afterInn1.innings1.wagonWheelShots.isNotEmpty())
+        assertTrue(
+            "Bowlers who bowled in T20 should lose stamina",
+            afterInn1.innings1.bowlingCard.any { it.legalBalls > 0 && it.stamina < 100 }
+        )
+        assertTrue("2nd innings should activate evening dew factor", afterInn1.isDewActiveNow)
+
+        val finished = MatchSimulationEngine.simulateFullMatch(afterInn1, Random(777L))
+        val perfs = com.example.engine.SeasonAwardsEngine.extractPerformances(finished)
+        assertTrue("SeasonAwardsEngine should extract player performances for Orange/Purple Cap & MVP", perfs.isNotEmpty())
+    }
+
+    @Test
+    fun drsReviewOverturnsOutDeductsUpheldAndPreservesUmpiresCall() {
+        val (india, australia) = sampleTeams()
+        val match = MatchSimulationEngine.createMatch(
+            teamA = india,
+            teamB = australia,
+            stage = MatchStage.LEAGUE,
+            format = MatchFormat.T20I,
+            random = Random(888L)
+        )
+        val striker = match.innings1.striker!!
+        val bowler = match.innings1.currentBowler!!
+
+        // 1. Overturned OUT (batter reviews -> restored to crease, review retained!)
+        val innWithOut = match.innings1.copy(
+            wickets = 1,
+            battingCard = match.innings1.battingCard.mapIndexed { idx, b ->
+                if (idx == 0) b.copy(out = true, dismissalText = "lbw b ${bowler.name}") else b
+            },
+            bowlingCard = match.innings1.bowlingCard.mapIndexed { idx, bw ->
+                if (idx == 0) bw.copy(wickets = 1) else bw
+            },
+            battingTeamReviewsRemaining = 2
+        )
+        val pendingOverturn = com.example.engine.DrsPendingDecision(
+            decisionId = 1L,
+            mode = com.example.engine.DrsMode.BALL_TRACKING,
+            originalDecisionOut = true,
+            overturned = true,
+            umpiresCall = false,
+            reviewingTeamId = india.teamId,
+            reviewingTeamName = india.teamName,
+            isBattingTeamReview = true,
+            batterId = striker.id,
+            batterName = striker.name,
+            bowlerName = bowler.name,
+            dismissalLabel = "LBW",
+            pitchingLabel = "IN LINE",
+            impactLabel = "IN LINE",
+            wicketsLabel = "MISSING",
+            spikeIntensity = 0f,
+            ballPitchX = 0.05f,
+            ballPitchY = 0.35f,
+            inningsNumber = 1,
+            overLabel = "0.1"
+        )
+        val afterOverturn = MatchSimulationEngine.resolveDrsReview(
+            match.copy(innings1 = innWithOut, pendingDrs = pendingOverturn)
+        )
+        assertEquals("Overturned OUT must restore team wickets from 1 to 0", 0, afterOverturn.innings1.wickets)
+        assertFalse("Overturned batter must be marked not out", afterOverturn.innings1.battingCard[0].out)
+        assertEquals("Successful review must keep 2 reviews remaining", 2, afterOverturn.innings1.battingTeamReviewsRemaining)
+        assertEquals(null, afterOverturn.pendingDrs)
+
+        // 2. Upheld OUT (not Umpire's Call -> loses 1 review)
+        val pendingUpheld = pendingOverturn.copy(
+            decisionId = 2L,
+            wicketsLabel = "HITTING",
+            overturned = false,
+            umpiresCall = false
+        )
+        val afterUpheld = MatchSimulationEngine.resolveDrsReview(
+            match.copy(innings1 = innWithOut, pendingDrs = pendingUpheld)
+        )
+        assertEquals("Upheld OUT keeps 1 wicket", 1, afterUpheld.innings1.wickets)
+        assertEquals("Unsuccessful review must deduct 1 review", 1, afterUpheld.innings1.battingTeamReviewsRemaining)
+
+        // 3. Umpire's Call -> decision stands AND review is retained!
+        val pendingUmpiresCall = pendingOverturn.copy(
+            decisionId = 3L,
+            wicketsLabel = "UMPIRE'S CALL",
+            overturned = false,
+            umpiresCall = true
+        )
+        val afterUmpiresCall = MatchSimulationEngine.resolveDrsReview(
+            match.copy(innings1 = innWithOut, pendingDrs = pendingUmpiresCall)
+        )
+        assertEquals("Umpire's Call retains original decision", 1, afterUmpiresCall.innings1.wickets)
+        assertEquals("Umpire's Call must retain review", 2, afterUmpiresCall.innings1.battingTeamReviewsRemaining)
+    }
+
+    @Test
+    fun multiPlayerTieredRetentionsAndFormerSquadRtmCard() {
+        // Verify tiered retention prices: Slot 1 = 15 Cr, Slot 2 = 11 Cr, Slot 3 = 8 Cr, Slot 4 = 6 Cr -> Total 40 Cr
+        assertEquals(1500L, com.example.data.model.SquadRules.retentionPriceForSlot(0))
+        assertEquals(1100L, com.example.data.model.SquadRules.retentionPriceForSlot(1))
+        assertEquals(800L, com.example.data.model.SquadRules.retentionPriceForSlot(2))
+        assertEquals(600L, com.example.data.model.SquadRules.retentionPriceForSlot(3))
+        assertEquals(4000L, com.example.data.model.SquadRules.totalRetentionCost(4))
+
+        val players = CricketerDatabase.allPlayers.filter { !it.overseas }.take(8)
+        val formerSquadIds = players.take(6).map { it.id }
+        val retainedIds = formerSquadIds.take(4)
+        val unretainedFormerPlayer = players[4] // Was in former squad, NOT retained -> RTM eligible!
+        val nonFormerPlayer = players[7]        // Never in former squad -> RTM blocked!
+
+        val team = TeamState(
+            teamId = "team_rtm_test",
+            ownerUid = "u1",
+            teamName = "Royal Challengers",
+            budgetLakhs = 10_000L - com.example.data.model.SquadRules.totalRetentionCost(4),
+            squadPlayerIds = retainedIds,
+            retainedPlayerIds = retainedIds,
+            formerSquadPlayerIds = formerSquadIds,
+            rtmRemaining = 1
+        )
+
+        val eligibleFormerRtm = com.example.data.model.SquadRuleValidator.checkRtmEligibility(
+            team = team,
+            player = unretainedFormerPlayer,
+            currentBidLakhs = 900L,
+            currentHighestBidderTeamId = "other_team"
+        )
+        assertTrue("Unretained former squad player must be RTM eligible: ${eligibleFormerRtm.reason}", eligibleFormerRtm.allowed)
+
+        val blockedNonFormerRtm = com.example.data.model.SquadRuleValidator.checkRtmEligibility(
+            team = team,
+            player = nonFormerPlayer,
+            currentBidLakhs = 900L,
+            currentHighestBidderTeamId = "other_team"
+        )
+        assertFalse("Player not in former squad must be blocked for RTM", blockedNonFormerRtm.allowed)
+    }
+
+    @Test
+    fun seasonLeaderboardsComputeOrangeCapPurpleCapAndMvp() {
+        val m1 = com.example.data.model.MatchRecord(
+            id = "s_m1",
+            stage = MatchStage.LEAGUE.name,
+            teamAId = "t1",
+            teamAName = "Mumbai",
+            teamBId = "t2",
+            teamBName = "Chennai",
+            winnerTeamId = "t1",
+            playerPerformances = listOf(
+                com.example.engine.MatchPlayerPerf(
+                    playerId = "p_bat",
+                    playerName = "Virat Star",
+                    teamName = "Mumbai",
+                    runs = 92,
+                    ballsFaced = 50,
+                    fours = 8,
+                    sixes = 5
+                ),
+                com.example.engine.MatchPlayerPerf(
+                    playerId = "p_bowl",
+                    playerName = "Jasprit Ace",
+                    teamName = "Mumbai",
+                    wickets = 4,
+                    runsConceded = 22,
+                    legalBallsBowled = 24
+                )
+            )
+        )
+        val m2 = com.example.data.model.MatchRecord(
+            id = "s_m2",
+            stage = MatchStage.LEAGUE.name,
+            teamAId = "t1",
+            teamAName = "Mumbai",
+            teamBId = "t3",
+            teamBName = "Delhi",
+            winnerTeamId = "t1",
+            playerPerformances = listOf(
+                com.example.engine.MatchPlayerPerf(
+                    playerId = "p_bat",
+                    playerName = "Virat Star",
+                    teamName = "Mumbai",
+                    runs = 68,
+                    ballsFaced = 42,
+                    fours = 6,
+                    sixes = 3
+                ),
+                com.example.engine.MatchPlayerPerf(
+                    playerId = "p_bowl",
+                    playerName = "Jasprit Ace",
+                    teamName = "Mumbai",
+                    wickets = 3,
+                    runsConceded = 18,
+                    legalBallsBowled = 24
+                )
+            )
+        )
+
+        val summary = com.example.engine.SeasonAwardsEngine.buildLeaderboards(listOf(m1, m2))
+        assertTrue(summary.hasData)
+        assertEquals("p_bat", summary.orangeCapPlayerId)
+        assertEquals(160, summary.orangeCapHolder?.runs)
+        assertEquals("p_bowl", summary.purpleCapPlayerId)
+        assertEquals(7, summary.purpleCapHolder?.wickets)
+        assertNotNull("MVP holder should be computed", summary.mvpHolder)
+    }
 }
+
 
 

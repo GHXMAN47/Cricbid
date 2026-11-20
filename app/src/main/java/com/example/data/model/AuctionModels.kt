@@ -39,7 +39,9 @@ enum class MatchStage(val label: String) {
 
 object SquadRules {
     const val INITIAL_BUDGET_LAKHS: Long = 10_000L // ₹100 Cr
-    const val RETENTION_PRICE_LAKHS: Long = 1_500L // ₹15 Cr marquee retention
+    const val RETENTION_PRICE_LAKHS: Long = 1_500L // Slot 1 ₹15 Cr marquee retention
+    const val MAX_RETENTIONS: Int = 4
+    val RETENTION_SLOTS_LAKHS: List<Long> = listOf(1_500L, 1_100L, 800L, 600L) // ₹15Cr, ₹11Cr, ₹8Cr, ₹6Cr
     const val MIN_SQUAD_SIZE: Int = 11
     const val MAX_SQUAD_SIZE: Int = 15 // Allows up to 8 overseas + 7 Indian players in full squad
     const val MAX_OVERSEAS_IN_SQUAD: Int = 8 // IPL Auction squad cap
@@ -53,6 +55,12 @@ object SquadRules {
     const val MIN_RESERVE_PER_SLOT_LAKHS: Long = 50L
     const val AUCTION_TIMER_SECONDS: Int = 10
     const val INITIAL_RTM_CARDS: Int = 1
+
+    fun retentionPriceForSlot(slotIndex: Int): Long =
+        RETENTION_SLOTS_LAKHS.getOrElse(slotIndex.coerceAtLeast(0)) { 600L }
+
+    fun totalRetentionCost(count: Int): Long =
+        (0 until count.coerceIn(0, MAX_RETENTIONS)).sumOf { retentionPriceForSlot(it) }
 }
 
 @Keep
@@ -78,6 +86,8 @@ data class TeamState(
     val budgetLakhs: Long = SquadRules.INITIAL_BUDGET_LAKHS,
     val rtmRemaining: Int = SquadRules.INITIAL_RTM_CARDS,
     val retainedPlayerId: String = "",
+    val retainedPlayerIds: List<String> = emptyList(),
+    val formerSquadPlayerIds: List<String> = emptyList(),
     val retentionDone: Boolean = false,
     val squadPlayerIds: List<String> = emptyList(),
     val squadPrices: Map<String, Long> = emptyMap(),
@@ -95,6 +105,8 @@ data class TeamState(
         "budgetLakhs" to budgetLakhs,
         "rtmRemaining" to rtmRemaining,
         "retainedPlayerId" to retainedPlayerId,
+        "retainedPlayerIds" to retainedPlayerIds,
+        "formerSquadPlayerIds" to formerSquadPlayerIds,
         "retentionDone" to retentionDone,
         "squadPlayerIds" to squadPlayerIds,
         "squadPrices" to squadPrices,
@@ -146,6 +158,11 @@ data class TeamState(
             }.toMap()
             val rawSquad = (map["squadPlayerIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
             val rawXi = (map["playingXiIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+            val legacyRetained = map["retainedPlayerId"] as? String ?: ""
+            val rawRetainedList = (map["retainedPlayerIds"] as? List<*>)?.mapNotNull { it as? String }
+                ?.takeIf { it.isNotEmpty() }
+                ?: listOfNotNull(legacyRetained.takeIf { it.isNotBlank() })
+            val rawFormerSquad = (map["formerSquadPlayerIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
 
             return TeamState(
                 teamId = map["teamId"] as? String ?: "",
@@ -154,7 +171,9 @@ data class TeamState(
                 bot = map["bot"] as? Boolean ?: false,
                 budgetLakhs = (map["budgetLakhs"] as? Number)?.toLong() ?: SquadRules.INITIAL_BUDGET_LAKHS,
                 rtmRemaining = (map["rtmRemaining"] as? Number)?.toInt() ?: SquadRules.INITIAL_RTM_CARDS,
-                retainedPlayerId = map["retainedPlayerId"] as? String ?: "",
+                retainedPlayerId = legacyRetained.ifBlank { rawRetainedList.firstOrNull().orEmpty() },
+                retainedPlayerIds = rawRetainedList,
+                formerSquadPlayerIds = rawFormerSquad,
                 retentionDone = map["retentionDone"] as? Boolean ?: false,
                 squadPlayerIds = rawSquad,
                 squadPrices = parsedPrices,
@@ -239,6 +258,7 @@ data class MatchRecord(
     val playerOfTheMatch: String = "",
     val innings1Worm: List<Long> = emptyList(),
     val innings2Worm: List<Long> = emptyList(),
+    val playerPerformances: List<com.example.engine.MatchPlayerPerf> = emptyList(),
     val status: String = "COMPLETED",
     @ServerTimestamp val createdAt: Timestamp? = null
 ) {
@@ -302,6 +322,9 @@ object SquadRuleValidator {
         if (team.rtmRemaining <= 0) {
             return BidEligibility(false, "RTM card already used")
         }
+        if (team.formerSquadPlayerIds.isNotEmpty() && player.id !in team.formerSquadPlayerIds) {
+            return BidEligibility(false, "RTM only valid on your former squad players")
+        }
         if (currentHighestBidderTeamId.isBlank() || currentBidLakhs <= 0L) {
             return BidEligibility(false, "Wait for a winning bid to match")
         }
@@ -310,6 +333,9 @@ object SquadRuleValidator {
         }
         return checkBidEligibility(team, player, currentBidLakhs, "")
     }
+
+    fun isFormerPlayerForRtm(team: TeamState, playerId: String): Boolean =
+        team.rtmRemaining > 0 && team.formerSquadPlayerIds.isNotEmpty() && playerId in team.formerSquadPlayerIds
 
     fun validatePlayingXi(
         selectedIds: List<String>,

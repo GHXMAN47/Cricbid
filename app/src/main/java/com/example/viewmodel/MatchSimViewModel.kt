@@ -2,19 +2,23 @@ package com.example.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.local.SavedMatchResumeSnapshot
 import com.example.data.model.AuctionRoom
 import com.example.data.model.MatchFormat
 import com.example.data.model.TeamState
 import com.example.engine.ActionAnimationSnapshot
 import com.example.engine.BallOutcomeType
 import com.example.engine.DeliveryType
+import com.example.engine.FieldPreset
 import com.example.engine.InteractiveBallInput
 import com.example.engine.InteractivePhaseResolver
 import com.example.engine.InteractivePlayFilter
 import com.example.engine.InteractivePlayRole
 import com.example.engine.LiveMatchState
 import com.example.engine.MatchSimulationEngine
+import com.example.engine.PitchType
 import com.example.engine.ShotDirection
+import com.example.engine.WeatherCondition
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,7 +44,8 @@ data class MatchSimUiState(
     val userTeamId: String = "",
     val playFilter: InteractivePlayFilter = InteractivePlayFilter.BOTH,
     val showPlayModeSetup: Boolean = false,
-    val autoSimmingSkippedPhase: Boolean = false
+    val autoSimmingSkippedPhase: Boolean = false,
+    val showDrsOverlay: Boolean = false
 )
 
 class MatchSimViewModel : ViewModel() {
@@ -84,16 +89,92 @@ class MatchSimViewModel : ViewModel() {
 
     fun confirmPlayModeSetup(
         filter: InteractivePlayFilter,
+        pitchType: PitchType? = null,
+        weatherCondition: WeatherCondition? = null,
+        dewFactor2ndInnings: Boolean? = null,
         onFinished: ((LiveMatchState) -> Unit)? = null
     ) {
-        _uiState.update {
-            it.copy(
+        _uiState.update { state ->
+            val updatedMatch = state.match?.let { m ->
+                if (pitchType != null || weatherCondition != null || dewFactor2ndInnings != null) {
+                    MatchSimulationEngine.updatePreMatchConditions(
+                        state = m,
+                        pitchType = pitchType ?: m.pitchType,
+                        weatherCondition = weatherCondition ?: m.weatherCondition,
+                        dewFactor2ndInnings = dewFactor2ndInnings ?: m.dewFactor2ndInnings
+                    )
+                } else m
+            }
+            state.copy(
+                match = updatedMatch,
                 playFilter = filter,
                 showPlayModeSetup = false,
-                statusNotice = "Mode: ${filter.label}"
+                statusNotice = "Mode: ${filter.label} • ${updatedMatch?.pitchType?.shortLabel ?: ""}"
             )
         }
         triggerSkippedPhaseAutoSimIfNeeded(onFinished)
+    }
+
+    fun resumeSavedMatch(
+        snapshot: SavedMatchResumeSnapshot,
+        onFinished: ((LiveMatchState) -> Unit)? = null
+    ) {
+        stopAutoPlay()
+        stopSkippedPhaseAutoSim()
+        _uiState.value = MatchSimUiState(
+            match = snapshot.match,
+            autoPlaying = false,
+            speed = PlaybackSpeed.NORMAL,
+            userTeamId = snapshot.userTeamId,
+            playFilter = snapshot.playFilter,
+            showPlayModeSetup = false,
+            autoSimmingSkippedPhase = false,
+            showDrsOverlay = false,
+            statusNotice = "Resumed saved match (${snapshot.headline})"
+        )
+        triggerSkippedPhaseAutoSimIfNeeded(onFinished)
+    }
+
+    fun setFieldPreset(preset: FieldPreset) {
+        val current = _uiState.value.match ?: return
+        if (current.fieldPreset == preset) return
+        val updated = MatchSimulationEngine.setFieldPreset(current, preset)
+        _uiState.update {
+            it.copy(
+                match = updated,
+                statusNotice = "Field Set: ${preset.label} (${preset.summary})"
+            )
+        }
+    }
+
+    fun startDrsReview() {
+        val current = _uiState.value.match ?: return
+        if (current.pendingDrs == null) return
+        stopAutoPlay()
+        _uiState.update { it.copy(showDrsOverlay = true) }
+    }
+
+    fun completeDrsReview(onFinished: ((LiveMatchState) -> Unit)? = null) {
+        val current = _uiState.value.match ?: return
+        val resolved = MatchSimulationEngine.resolveDrsReview(current)
+        _uiState.update {
+            it.copy(
+                match = resolved,
+                showDrsOverlay = false,
+                statusNotice = resolved.commentaryFeed.firstOrNull()?.commentary ?: "DRS decision finalized"
+            )
+        }
+        if (resolved.finished) {
+            onFinished?.invoke(resolved)
+        } else {
+            triggerSkippedPhaseAutoSimIfNeeded(onFinished)
+        }
+    }
+
+    fun dismissDrs() {
+        val current = _uiState.value.match ?: return
+        val cleared = MatchSimulationEngine.dismissPendingDrs(current)
+        _uiState.update { it.copy(match = cleared, showDrsOverlay = false) }
     }
 
     fun setPlayFilter(
@@ -221,7 +302,10 @@ class MatchSimViewModel : ViewModel() {
             bowlerName = lastEvent.bowlerName,
             overLabel = lastEvent.overLabel,
             isSuperOver = lastEvent.isSuperOver,
-            isRedBall = updated.format == MatchFormat.TEST
+            isRedBall = updated.format == MatchFormat.TEST,
+            pitchType = updated.pitchType,
+            dewActive = updated.isDewActiveNow,
+            fieldPreset = updated.fieldPreset
         )
     }
 

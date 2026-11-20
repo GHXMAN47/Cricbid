@@ -644,6 +644,7 @@ internal fun careerDifficultyAccent(difficulty: CareerDifficulty): Color = when 
     CareerDifficulty.EASY -> TurfEmerald
     CareerDifficulty.NORMAL -> BoundarySky
     CareerDifficulty.HARD -> WicketCrimson
+    CareerDifficulty.LEGEND -> AuctionGold
 }
 
 @Composable

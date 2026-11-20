@@ -63,10 +63,17 @@ import com.example.data.local.AccountProfile
 import com.example.data.local.LocalAuctionRepository
 import com.example.data.local.LocalCareerStore
 import com.example.data.local.LocalInternationalStore
+import com.example.data.local.LocalMatchResumeStore
 import com.example.data.local.LocalProfileStore
+import com.example.data.local.LocalTrophyCabinetStore
+import com.example.data.local.SavedMatchResumeSnapshot
+import com.example.data.local.SavedMatchSource
 import com.example.data.model.CareerMatchType
 import com.example.data.model.MatchStage
 import com.example.data.model.RoomStatus
+import com.example.engine.SeasonAwardsEngine
+import com.example.engine.TrophyCabinetData
+import com.example.engine.TrophyCabinetRecord
 import com.example.ui.screens.CareerScreen
 import com.example.ui.screens.HomeLobbyScreen
 import com.example.ui.screens.InternationalScreen
@@ -78,6 +85,7 @@ import com.example.ui.screens.RetentionScreen
 import com.example.ui.screens.RoomLobbyScreen
 import com.example.ui.screens.SquadSelectionScreen
 import com.example.ui.screens.StandingsScreen
+import com.example.ui.screens.TrophyCabinetScreen
 import com.example.ui.screens.WelcomeScreen
 import com.example.ui.theme.AuctionGold
 import com.example.ui.theme.BroadcastSilver
@@ -466,7 +474,10 @@ private fun CricBidArenaFlow(
     onConnectCloudSync: () -> Unit,
     onDisconnectCloudSync: () -> Unit
 ) {
+    val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
+    val matchResumeStore = remember(context) { runCatching { LocalMatchResumeStore(context) }.getOrNull() }
+    val trophyCabinetStore = remember(context) { runCatching { LocalTrophyCabinetStore(context) }.getOrNull() }
 
     val viewModel: CricBidViewModel = viewModel(
         key = sessionKey,
@@ -537,17 +548,83 @@ private fun CricBidArenaFlow(
     var inInternationalHub by rememberSaveable { mutableStateOf(false) }
     var inCareerMode by rememberSaveable { mutableStateOf(false) }
     var inProfileScreen by rememberSaveable { mutableStateOf(false) }
+    var showTrophyCabinet by rememberSaveable { mutableStateOf(false) }
+    var trophyCabinetInitialTab by rememberSaveable { mutableIntStateOf(0) }
     var viewingStandingsMode by rememberSaveable { mutableStateOf<String?>(null) } // "IPL" or "INTERNATIONAL"
     var activeMatchIsInternational by rememberSaveable { mutableStateOf(false) }
     var activeCareerMatchType by rememberSaveable { mutableStateOf<CareerMatchType?>(null) }
     var careerMatchRecordedKey by remember { mutableStateOf<String?>(null) }
     var recordedMatchStatKeys by remember { mutableStateOf(emptySet<String>()) }
+    var savedMatchSnapshot by remember(sessionKey) {
+        mutableStateOf(runCatching { matchResumeStore?.loadOngoingMatch() }.getOrNull())
+    }
+    var lastActiveRoomCode by remember(sessionKey) {
+        mutableStateOf(runCatching { matchResumeStore?.loadLastActiveRoomCode() }.getOrNull())
+    }
+    var trophyCabinetData by remember(sessionKey) {
+        mutableStateOf(runCatching { trophyCabinetStore?.loadCabinet() }.getOrNull() ?: TrophyCabinetData())
+    }
 
     val myRoomsState by viewModel.myRoomsState.collectAsStateWithLifecycle()
     val activeState by viewModel.activeState.collectAsStateWithLifecycle()
     val matchSimState by matchSimViewModel.uiState.collectAsStateWithLifecycle()
     val internationalState by internationalViewModel.uiState.collectAsStateWithLifecycle()
     val careerState by careerViewModel.uiState.collectAsStateWithLifecycle()
+
+    val iplLeaderboards = remember(activeState.matches) {
+        SeasonAwardsEngine.buildLeaderboards(activeState.matches)
+    }
+    val intlLeaderboards = remember(
+        internationalState.campaign.worldCupMatches,
+        internationalState.campaign.seriesMatches
+    ) {
+        SeasonAwardsEngine.buildLeaderboards(
+            internationalState.campaign.worldCupMatches + internationalState.campaign.seriesMatches
+        )
+    }
+
+    // Auto-save ongoing match locally so relaunching can resume right where the player left off
+    LaunchedEffect(
+        matchSimState.match,
+        matchSimState.playFilter,
+        matchSimState.showPlayModeSetup,
+        activeMatchIsInternational,
+        activeCareerMatchType,
+        activeState.activeRoomCode
+    ) {
+        val m = matchSimState.match
+        if (m != null) {
+            if (m.finished) {
+                matchResumeStore?.clearOngoingMatch()
+                savedMatchSnapshot = null
+            } else if (!matchSimState.showPlayModeSetup || m.innings1.legalBalls > 0 || m.innings2.legalBalls > 0) {
+                val src = when {
+                    activeCareerMatchType != null -> SavedMatchSource.CAREER
+                    activeMatchIsInternational -> SavedMatchSource.INTERNATIONAL
+                    else -> SavedMatchSource.IPL_ROOM
+                }
+                val snap = SavedMatchResumeSnapshot(
+                    match = m,
+                    userTeamId = matchSimState.userTeamId,
+                    playFilter = matchSimState.playFilter,
+                    source = src,
+                    roomCode = activeState.activeRoomCode,
+                    careerMatchType = activeCareerMatchType
+                )
+                matchResumeStore?.saveOngoingMatch(snap)
+                savedMatchSnapshot = snap
+            }
+        }
+    }
+
+    // Auto-save last active auction room code for quick resume
+    LaunchedEffect(activeState.activeRoomCode) {
+        val code = activeState.activeRoomCode
+        if (!code.isNullOrBlank()) {
+            matchResumeStore?.saveLastActiveRoomCode(code)
+            lastActiveRoomCode = code
+        }
+    }
 
     LaunchedEffect(activeState.snackbarMessage) {
         val msg = activeState.snackbarMessage
@@ -607,6 +684,22 @@ private fun CricBidArenaFlow(
                             val won = m.winnerTeamId == "career_user_team"
                             val wonTrophy = won && careerMatchType == CareerMatchType.WORLD_CUP
                             onRecordMatchOutcome(won, wonTrophy)
+                            if (careerMatchType == CareerMatchType.WORLD_CUP && trophyCabinetStore != null) {
+                                val runnerUp = if (m.winnerTeamId == m.teamA.teamId) m.teamB.teamName else m.teamA.teamName
+                                val winner = if (m.winnerTeamId == m.teamA.teamId) m.teamA.teamName else m.teamB.teamName
+                                trophyCabinetData = trophyCabinetStore.recordFinalOutcome(
+                                    TrophyCabinetRecord(
+                                        id = key,
+                                        title = "Career World Cup Final",
+                                        competitionType = "CAREER",
+                                        championTeamName = winner,
+                                        runnerUpTeamName = runnerUp,
+                                        userWon = won,
+                                        summary = m.resultSummary,
+                                        mvpWinner = m.playerOfTheMatch
+                                    )
+                                )
+                            }
                         }
                     }
                 }
@@ -642,12 +735,17 @@ private fun CricBidArenaFlow(
                     playFilter = matchSimState.playFilter,
                     showPlayModeSetup = matchSimState.showPlayModeSetup,
                     autoSimmingSkippedPhase = matchSimState.autoSimmingSkippedPhase,
-                    onConfirmPlayModeSetup = { filter ->
-                        matchSimViewModel.confirmPlayModeSetup(filter) { onFinishCareerMatch() }
+                    onConfirmPlayModeSetup = { filter, pitch, weather, dew ->
+                        matchSimViewModel.confirmPlayModeSetup(filter, pitch, weather, dew) { onFinishCareerMatch() }
                     },
                     onChangePlayFilter = { filter ->
                         matchSimViewModel.setPlayFilter(filter) { onFinishCareerMatch() }
                     },
+                    showDrsOverlay = matchSimState.showDrsOverlay,
+                    onSelectFieldPreset = { preset -> matchSimViewModel.setFieldPreset(preset) },
+                    onStartDrsReview = { matchSimViewModel.startDrsReview() },
+                    onCompleteDrsReview = { matchSimViewModel.completeDrsReview { onFinishCareerMatch() } },
+                    onDismissDrs = { matchSimViewModel.dismissDrs() },
                     modifier = contentModifier
                 )
             }
@@ -664,8 +762,29 @@ private fun CricBidArenaFlow(
                                 recordedMatchStatKeys = recordedMatchStatKeys + statKey
                                 val userNationId = internationalState.campaign.userNationId
                                 val won = rec.winnerTeamId == userNationId
-                                val wonTrophy = won && (rec.matchStage == MatchStage.FINAL || rec.matchStage == MatchStage.WTC_FINAL)
+                                val isFinal = rec.matchStage == MatchStage.FINAL || rec.matchStage == MatchStage.WTC_FINAL
+                                val wonTrophy = won && isFinal
                                 onRecordMatchOutcome(won, wonTrophy)
+                                if (isFinal && trophyCabinetStore != null) {
+                                    val updatedMatches = internationalState.campaign.worldCupMatches + rec
+                                    val lb = SeasonAwardsEngine.buildLeaderboards(updatedMatches)
+                                    val runnerUp = if (rec.winnerTeamId == rec.teamAId) rec.teamBName else rec.teamAName
+                                    val winner = if (rec.winnerTeamId == rec.teamAId) rec.teamAName else rec.teamBName
+                                    trophyCabinetData = trophyCabinetStore.recordFinalOutcome(
+                                        TrophyCabinetRecord(
+                                            id = statKey,
+                                            title = "${internationalState.campaign.format.shortLabel} World Cup Final",
+                                            competitionType = "WORLD_CUP",
+                                            championTeamName = winner,
+                                            runnerUpTeamName = runnerUp,
+                                            userWon = won,
+                                            summary = rec.resultSummary,
+                                            orangeCapWinner = lb.orangeCapHolder?.let { "${it.playerName} (${it.runs})" }.orEmpty(),
+                                            purpleCapWinner = lb.purpleCapHolder?.let { "${it.playerName} (${it.wickets})" }.orEmpty(),
+                                            mvpWinner = lb.mvpHolder?.playerName ?: rec.playerOfTheMatch
+                                        )
+                                    )
+                                }
                             }
                         }
                     )
@@ -702,12 +821,19 @@ private fun CricBidArenaFlow(
                     playFilter = matchSimState.playFilter,
                     showPlayModeSetup = matchSimState.showPlayModeSetup,
                     autoSimmingSkippedPhase = matchSimState.autoSimmingSkippedPhase,
-                    onConfirmPlayModeSetup = { filter ->
-                        matchSimViewModel.confirmPlayModeSetup(filter) { onFinishInternational() }
+                    onConfirmPlayModeSetup = { filter, pitch, weather, dew ->
+                        matchSimViewModel.confirmPlayModeSetup(filter, pitch, weather, dew) { onFinishInternational() }
                     },
                     onChangePlayFilter = { filter ->
                         matchSimViewModel.setPlayFilter(filter) { onFinishInternational() }
                     },
+                    showDrsOverlay = matchSimState.showDrsOverlay,
+                    onSelectFieldPreset = { preset -> matchSimViewModel.setFieldPreset(preset) },
+                    onStartDrsReview = { matchSimViewModel.startDrsReview() },
+                    onCompleteDrsReview = { matchSimViewModel.completeDrsReview { onFinishInternational() } },
+                    onDismissDrs = { matchSimViewModel.dismissDrs() },
+                    orangeCapPlayerId = intlLeaderboards.orangeCapPlayerId,
+                    purpleCapPlayerId = intlLeaderboards.purpleCapPlayerId,
                     modifier = contentModifier
                 )
             }
@@ -723,11 +849,36 @@ private fun CricBidArenaFlow(
                             val statKey = "room_${activeRoom.roomCode}_${rec.teamAId}_${rec.teamBId}_${rec.teamAScore}_${rec.teamBScore}"
                             if (statKey !in recordedMatchStatKeys) {
                                 recordedMatchStatKeys = recordedMatchStatKeys + statKey
-                                val myTeamId = activeRoom.teamForUser(currentUserId)?.teamId
+                                val myTeam = activeRoom.teamForUser(currentUserId)
+                                val myTeamId = myTeam?.teamId
                                 if (myTeamId != null && (rec.teamAId == myTeamId || rec.teamBId == myTeamId)) {
                                     val won = rec.winnerTeamId == myTeamId
                                     val wonTrophy = won && rec.matchStage == MatchStage.FINAL
                                     onRecordMatchOutcome(won, wonTrophy)
+                                }
+                                if (rec.matchStage == MatchStage.FINAL && trophyCabinetStore != null) {
+                                    val updatedMatches = activeState.matches + rec
+                                    val lb = SeasonAwardsEngine.buildLeaderboards(updatedMatches)
+                                    val winner = if (rec.winnerTeamId == rec.teamAId) rec.teamAName else rec.teamBName
+                                    val runnerUp = if (rec.winnerTeamId == rec.teamAId) rec.teamBName else rec.teamAName
+                                    val userWonFinal = myTeamId != null && rec.winnerTeamId == myTeamId
+                                    trophyCabinetData = trophyCabinetStore.recordFinalOutcome(
+                                        TrophyCabinetRecord(
+                                            id = statKey,
+                                            title = "CricBid IPL Final (Room ${activeRoom.roomCode})",
+                                            competitionType = "IPL",
+                                            championTeamName = winner,
+                                            runnerUpTeamName = runnerUp,
+                                            userWon = userWonFinal,
+                                            summary = rec.resultSummary,
+                                            orangeCapWinner = lb.orangeCapHolder?.let { "${it.playerName} (${it.runs})" }.orEmpty(),
+                                            purpleCapWinner = lb.purpleCapHolder?.let { "${it.playerName} (${it.wickets})" }.orEmpty(),
+                                            mvpWinner = lb.mvpHolder?.playerName ?: rec.playerOfTheMatch
+                                        )
+                                    )
+                                    if (myTeam != null) {
+                                        trophyCabinetStore.saveLastSeasonSquad(myTeam.teamName, myTeam.squadPlayerIds)
+                                    }
                                 }
                             }
                             res
@@ -763,12 +914,42 @@ private fun CricBidArenaFlow(
                     playFilter = matchSimState.playFilter,
                     showPlayModeSetup = matchSimState.showPlayModeSetup,
                     autoSimmingSkippedPhase = matchSimState.autoSimmingSkippedPhase,
-                    onConfirmPlayModeSetup = { filter ->
-                        matchSimViewModel.confirmPlayModeSetup(filter) { onFinishPersist() }
+                    onConfirmPlayModeSetup = { filter, pitch, weather, dew ->
+                        matchSimViewModel.confirmPlayModeSetup(filter, pitch, weather, dew) { onFinishPersist() }
                     },
                     onChangePlayFilter = { filter ->
                         matchSimViewModel.setPlayFilter(filter) { onFinishPersist() }
                     },
+                    showDrsOverlay = matchSimState.showDrsOverlay,
+                    onSelectFieldPreset = { preset -> matchSimViewModel.setFieldPreset(preset) },
+                    onStartDrsReview = { matchSimViewModel.startDrsReview() },
+                    onCompleteDrsReview = { matchSimViewModel.completeDrsReview { onFinishPersist() } },
+                    onDismissDrs = { matchSimViewModel.dismissDrs() },
+                    orangeCapPlayerId = iplLeaderboards.orangeCapPlayerId,
+                    purpleCapPlayerId = iplLeaderboards.purpleCapPlayerId,
+                    modifier = contentModifier
+                )
+            }
+
+            // 1C. Trophy Cabinet & Season Leaderboards (Orange Cap / Purple Cap / MVP)
+            showTrophyCabinet -> {
+                val activeLb = when {
+                    activeRoom != null -> iplLeaderboards
+                    inInternationalHub -> intlLeaderboards
+                    iplLeaderboards.hasData -> iplLeaderboards
+                    else -> intlLeaderboards
+                }
+                val compTitle = when {
+                    activeRoom != null -> "IPL Season • Room ${activeRoom.roomCode}"
+                    inInternationalHub -> "${internationalState.campaign.format.shortLabel} International Season"
+                    else -> "Active Tournament Caps"
+                }
+                TrophyCabinetScreen(
+                    cabinet = trophyCabinetData,
+                    seasonLeaderboards = activeLb,
+                    activeCompetitionTitle = compTitle,
+                    initialTab = trophyCabinetInitialTab,
+                    onBack = { showTrophyCabinet = false },
                     modifier = contentModifier
                 )
             }
@@ -979,6 +1160,15 @@ private fun CricBidArenaFlow(
 
             // 2C. Home Room Creator / Joiner when no active room selected
             activeState.activeRoomCode == null -> {
+                val resumableAuctionRoom = remember(myRoomsState, lastActiveRoomCode) {
+                    val rooms = (myRoomsState as? com.example.viewmodel.UiState.Success)?.data.orEmpty()
+                    rooms.firstOrNull {
+                        it.roomCode == lastActiveRoomCode &&
+                            (it.roomStatus == RoomStatus.AUCTION || it.roomStatus == RoomStatus.RETENTION)
+                    } ?: rooms.firstOrNull {
+                        it.roomStatus == RoomStatus.AUCTION || it.roomStatus == RoomStatus.RETENTION
+                    }
+                }
                 HomeLobbyScreen(
                     profile = profile,
                     isCloudConnected = isCloudConnected,
@@ -1002,8 +1192,41 @@ private fun CricBidArenaFlow(
                         inInternationalHub = false
                         inCareerMode = false
                         inProfileScreen = false
+                        showTrophyCabinet = false
                         onDisconnectCloudSync()
                     },
+                    savedMatchSnapshot = savedMatchSnapshot,
+                    onResumeSavedMatch = {
+                        val snap = savedMatchSnapshot ?: return@HomeLobbyScreen
+                        when (snap.source) {
+                            SavedMatchSource.CAREER -> {
+                                activeCareerMatchType = snap.careerMatchType ?: CareerMatchType.IPL_T20
+                                activeMatchIsInternational = false
+                                inCareerMode = true
+                            }
+                            SavedMatchSource.INTERNATIONAL -> {
+                                activeMatchIsInternational = true
+                                activeCareerMatchType = null
+                                inInternationalHub = true
+                            }
+                            SavedMatchSource.IPL_ROOM -> {
+                                activeMatchIsInternational = false
+                                activeCareerMatchType = null
+                                snap.roomCode?.let { viewModel.openRoom(it) }
+                            }
+                        }
+                        matchSimViewModel.resumeSavedMatch(snap)
+                    },
+                    onDiscardSavedMatch = {
+                        matchResumeStore?.clearOngoingMatch()
+                        savedMatchSnapshot = null
+                    },
+                    trophyCabinet = trophyCabinetData,
+                    onOpenTrophyCabinet = {
+                        trophyCabinetInitialTab = 0
+                        showTrophyCabinet = true
+                    },
+                    resumableRoom = resumableAuctionRoom,
                     modifier = contentModifier
                 )
             }
@@ -1054,14 +1277,14 @@ private fun CricBidArenaFlow(
                 )
             }
 
-            // 6. Marquee Retention Round
+            // 6. Marquee Retention Round (Up to 4 Tiered Retentions + Former Squad RTM Eligibility)
             activeRoom.roomStatus == RoomStatus.RETENTION -> {
                 RetentionScreen(
                     room = activeRoom,
                     currentUid = currentUserId,
                     busy = activeState.busy,
                     onBack = { viewModel.closeRoom() },
-                    onRetainPlayer = { playerId -> viewModel.retainMarqueePlayer(playerId) },
+                    onSubmitRetentions = { playerIds -> viewModel.submitMultiRetentions(playerIds) },
                     onSkipRetention = { viewModel.skipMarqueeRetention() },
                     onHostLaunchAuction = { viewModel.beginLiveAuctionFromRetention() },
                     modifier = contentModifier
@@ -1128,6 +1351,14 @@ private fun CricBidArenaFlow(
                         )
                     },
                     onQuickSimLeague = { fixtures -> viewModel.quickSimLeagueMatches(fixtures) },
+                    seasonLeaderboards = iplLeaderboards,
+                    onOpenTrophyCabinet = {
+                        trophyCabinetInitialTab = 1
+                        showTrophyCabinet = true
+                    },
+                    onStartNewSeasonMegaAuction = if (activeRoom.hostUid == currentUserId || !isCloudConnected) {
+                        { viewModel.startNewSeasonMegaAuction() }
+                    } else null,
                     modifier = contentModifier
                 )
             }
