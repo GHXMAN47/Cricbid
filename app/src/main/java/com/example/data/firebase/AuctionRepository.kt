@@ -42,13 +42,13 @@ class AuctionRepository(
     private val activeActorId: String = "",
     initialRecentRoomCodes: List<String> = emptyList(),
     private val onRememberRoomCode: (String) -> Unit = {},
-    private val auth: FirebaseAuth = Firebase.auth
+    private val auth: FirebaseAuth? = runCatching { Firebase.auth }.getOrNull()
 ) : AuctionDataSource {
     constructor(context: Context, activeActorId: String = "") : this(
-        db = FirebaseFirestore.getInstance(
-            context.applicationContext.getString(R.string.firestore_database_id)
-        ),
-        activeActorId = activeActorId
+        db = com.example.FirebaseSafeInit.safeFirestore(context)
+            ?: throw IllegalStateException("Firestore is not initialized in this environment."),
+        activeActorId = activeActorId,
+        auth = com.example.FirebaseSafeInit.safeFirebaseAuth(context)
     )
 
     private val recentRoomCodesFlow = MutableStateFlow(
@@ -60,7 +60,7 @@ class AuctionRepository(
     )
 
     private fun actorId(): String =
-        auth.currentUser?.uid
+        runCatching { auth?.currentUser?.uid }.getOrNull()
             ?: activeActorId.takeIf { it.isNotBlank() }
             ?: throw IllegalStateException("Player session ID is missing. Please restart CricBid.")
 
@@ -76,7 +76,7 @@ class AuctionRepository(
 
     override suspend fun ensureUserProfile(displayName: String): Result<UserProfile> {
         val safeName = displayName.trim().take(60).ifBlank { "Cricket Manager" }
-        val authUid = auth.currentUser?.uid
+        val authUid = runCatching { auth?.currentUser?.uid }.getOrNull()
             ?: return Result.success(UserProfile(id = actorId(), userId = actorId(), displayName = safeName))
         val path = "users/$authUid"
         return try {
@@ -110,7 +110,7 @@ class AuctionRepository(
     // --- REAL-TIME OBSERVERS ---
 
     override fun observeMyRooms(uid: String): Flow<List<AuctionRoom>> {
-        val authUid = auth.currentUser?.uid
+        val authUid = runCatching { auth?.currentUser?.uid }.getOrNull()
         if (authUid != null && authUid == uid) {
             return flow {
                 val path = "rooms"
@@ -129,7 +129,7 @@ class AuctionRepository(
                                 .firstOrNull()
                             if (firestoreError == null && error is CancellationException) throw error
                             val exceptionToLog = firestoreError ?: (error as? Exception)
-                            if (exceptionToLog != null && auth.currentUser?.uid == authUid) {
+                            if (exceptionToLog != null && runCatching { auth?.currentUser?.uid }.getOrNull() == authUid) {
                                 handleFirestoreError(exceptionToLog, OperationType.LIST, path)
                             }
                             throw error

@@ -28,7 +28,7 @@ fun handleFirestoreError(
 
     val currentUser = try {
         FirebaseAuth.getInstance().currentUser
-    } catch (_: Exception) {
+    } catch (_: Throwable) {
         null
     }
 

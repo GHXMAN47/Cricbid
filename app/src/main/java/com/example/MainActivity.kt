@@ -3,25 +3,44 @@ package com.example
 import android.Manifest
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -30,17 +49,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.example.data.AuctionDataSource
 import com.example.data.firebase.AuctionRepository
-import com.example.data.firebase.authStateFlow
 import com.example.data.firebase.onGoogleSignInClicked
+import com.example.data.firebase.safeAuthStateFlow
 import com.example.data.firebase.signOutFromGoogle
 import com.example.data.local.AccountProfile
+import com.example.data.local.LocalAuctionRepository
 import com.example.data.local.LocalCareerStore
 import com.example.data.local.LocalInternationalStore
 import com.example.data.local.LocalProfileStore
@@ -61,41 +85,233 @@ import com.example.ui.screens.RoomLobbyScreen
 import com.example.ui.screens.SquadSelectionScreen
 import com.example.ui.screens.StandingsScreen
 import com.example.ui.screens.WelcomeScreen
+import com.example.ui.theme.AuctionGold
+import com.example.ui.theme.BroadcastSilver
+import com.example.ui.theme.BroadcastWhite
 import com.example.ui.theme.CricBidTheme
+import com.example.ui.theme.MonoFontFamily
 import com.example.ui.theme.NavyMidnight
+import com.example.ui.theme.NavyOutline
+import com.example.ui.theme.NavySurface
+import com.example.ui.theme.OnEmeraldDark
 import com.example.ui.theme.TurfEmerald
+import com.example.ui.theme.WicketCrimson
 import com.example.viewmodel.CareerViewModel
 import com.example.viewmodel.CricBidViewModel
 import com.example.viewmodel.InternationalViewModel
 import com.example.viewmodel.MatchSimViewModel
-import com.google.firebase.Firebase
-import com.google.firebase.auth.auth
-import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.auth.FirebaseAuth
+
+private const val MAIN_ACTIVITY_TAG = "MainActivity"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        setContent {
-            CricBidTheme {
-                CricBidAppRoot()
+        runCatching { enableEdgeToEdge() }
+            .onFailure { Log.w(MAIN_ACTIVITY_TAG, "enableEdgeToEdge skipped: ${it.message}") }
+
+        var initialStartupError: String? = null
+        try {
+            FirebaseSafeInit.ensureInitialized(applicationContext)
+        } catch (t: Throwable) {
+            Log.e(MAIN_ACTIVITY_TAG, "Unexpected error during early startup", t)
+            initialStartupError = t.localizedMessage ?: t.toString()
+        }
+
+        try {
+            setContent {
+                CricBidTheme {
+                    var retryAttempt by remember { mutableIntStateOf(0) }
+                    var forcedSafeGuest by remember { mutableStateOf(false) }
+                    var startupError by remember(retryAttempt) { mutableStateOf(initialStartupError) }
+
+                    if (startupError != null && !forcedSafeGuest) {
+                        StartupErrorFallbackScreen(
+                            errorMessage = startupError ?: "Unknown startup error",
+                            onRetry = {
+                                initialStartupError = null
+                                startupError = null
+                                retryAttempt += 1
+                            },
+                            onContinueSafeGuest = {
+                                initialStartupError = null
+                                startupError = null
+                                forcedSafeGuest = true
+                            }
+                        )
+                    } else {
+                        key(retryAttempt, forcedSafeGuest) {
+                            CricBidAppRoot(
+                                forceOfflineGuestMode = forcedSafeGuest,
+                                onStartupFatalError = { err ->
+                                    startupError = err
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            Log.e(MAIN_ACTIVITY_TAG, "Critical UI setup failure", t)
+            runCatching {
+                setContent {
+                    CricBidTheme {
+                        StartupErrorFallbackScreen(
+                            errorMessage = t.localizedMessage ?: t.toString(),
+                            onRetry = { recreate() },
+                            onContinueSafeGuest = { recreate() }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private data class StartupBootstrap(
+    val profileStore: LocalProfileStore,
+    val credentialManager: CredentialManager?,
+    val auth: FirebaseAuth?,
+    val initialProfile: AccountProfile?,
+    val initialSavedUsernames: List<String>
+)
+
+@Composable
+private fun StartupErrorFallbackScreen(
+    errorMessage: String,
+    onRetry: () -> Unit,
+    onContinueSafeGuest: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(NavyMidnight)
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .padding(20.dp)
+            .testTag("startup_error_fallback_screen"),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            color = NavySurface,
+            shape = RoundedCornerShape(20.dp),
+            border = BorderStroke(1.2.dp, WicketCrimson.copy(alpha = 0.7f)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = 480.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "CRICBID STARTUP RECOVERY",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold),
+                    color = AuctionGold
+                )
+                Text(
+                    text = "CricBid hit an unexpected launch error instead of closing. You can continue immediately in offline Guest mode or retry launch.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = BroadcastSilver
+                )
+                Surface(
+                    color = NavyMidnight,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, NavyOutline),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = errorMessage,
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFontFamily),
+                        color = BroadcastWhite,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
+                Button(
+                    onClick = onContinueSafeGuest,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = TurfEmerald,
+                        contentColor = OnEmeraldDark
+                    ),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp)
+                        .testTag("startup_fallback_guest_button")
+                ) {
+                    Text("Continue in Safe Guest Mode", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
+                }
+                OutlinedButton(
+                    onClick = onRetry,
+                    border = BorderStroke(1.dp, AuctionGold.copy(alpha = 0.7f)),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("startup_fallback_retry_button")
+                ) {
+                    Text("Retry Launch", style = MaterialTheme.typography.labelLarge, color = AuctionGold)
+                }
             }
         }
     }
 }
 
 @Composable
-fun CricBidAppRoot() {
+fun CricBidAppRoot(
+    forceOfflineGuestMode: Boolean = false,
+    onStartupFatalError: (String) -> Unit = {}
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val profileStore = remember(context) { LocalProfileStore(context) }
-    val credentialManager = remember(context) { CredentialManager.create(context) }
 
-    val auth = Firebase.auth
-    val firebaseUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
+    val bootstrapResult = remember(context, forceOfflineGuestMode) {
+        try {
+            val store = LocalProfileStore(context)
+            val credMgr = if (forceOfflineGuestMode) null else runCatching { CredentialManager.create(context) }.getOrNull()
+            val firebaseAuth = if (forceOfflineGuestMode) null else FirebaseSafeInit.safeFirebaseAuth(context)
+            val loadedProfile = runCatching { store.loadActiveProfile() }.getOrNull()
+            val loadedNames = runCatching { store.listSavedUsernames() }.getOrDefault(emptyList())
+            Result.success(
+                StartupBootstrap(
+                    profileStore = store,
+                    credentialManager = credMgr,
+                    auth = firebaseAuth,
+                    initialProfile = loadedProfile,
+                    initialSavedUsernames = loadedNames
+                )
+            )
+        } catch (t: Throwable) {
+            Log.e(MAIN_ACTIVITY_TAG, "Startup bootstrap failed", t)
+            Result.failure(t)
+        }
+    }
 
-    var activeProfile by remember { mutableStateOf(profileStore.loadActiveProfile()) }
-    var savedUsernames by remember { mutableStateOf(profileStore.listSavedUsernames()) }
+    val bootstrap = bootstrapResult.getOrNull()
+    if (bootstrap == null) {
+        val errText = bootstrapResult.exceptionOrNull()?.let { "${it::class.java.simpleName}: ${it.localizedMessage ?: it}" }
+            ?: "Unable to initialize local storage."
+        LaunchedEffect(errText) { onStartupFatalError(errText) }
+        StartupErrorFallbackScreen(
+            errorMessage = errText,
+            onRetry = { onStartupFatalError(errText) },
+            onContinueSafeGuest = { onStartupFatalError(errText) }
+        )
+        return
+    }
+
+    val profileStore = bootstrap.profileStore
+    val credentialManager = bootstrap.credentialManager
+    val auth = bootstrap.auth
+
+    val authFlow = remember(auth) { safeAuthStateFlow(auth) }
+    val initialFirebaseUser = remember(auth) { runCatching { auth?.currentUser }.getOrNull() }
+    val firebaseUser by authFlow.collectAsStateWithLifecycle(initialValue = initialFirebaseUser)
+
+    var activeProfile by remember { mutableStateOf(bootstrap.initialProfile) }
+    var savedUsernames by remember { mutableStateOf(bootstrap.initialSavedUsernames) }
     var enteredArena by rememberSaveable { mutableStateOf(false) }
     var authErrorMessage by remember { mutableStateOf<String?>(null) }
     var profileErrorMessage by remember { mutableStateOf<String?>(null) }
@@ -111,7 +327,9 @@ fun CricBidAppRoot() {
             onAuthSuccess = {
                 cloudSignInLoading = false
                 if (activeProfile == null) {
-                    val fallback = auth.currentUser?.displayName?.trim().orEmpty().ifBlank { "Manager" }
+                    val fallback = runCatching { auth?.currentUser?.displayName?.trim().orEmpty() }
+                        .getOrDefault("")
+                        .ifBlank { "Manager" }
                     activeProfile = profileStore.continueAsGuest(fallback)
                 }
             },
@@ -195,6 +413,7 @@ fun CricBidAppRoot() {
                 onRememberRoomCode = { code -> profileStore.rememberRoomCode(code) },
                 profileErrorMessage = profileErrorMessage,
                 isCloudConnected = isCloudConnected,
+                forceOfflineGuestMode = forceOfflineGuestMode,
                 onSaveProfile = { username, avatarId, favTeam, newPassword ->
                     profileErrorMessage = null
                     val result = profileStore.updateActiveProfile(
@@ -229,7 +448,7 @@ fun CricBidAppRoot() {
                 },
                 onConnectCloudSync = triggerOptionalGoogleSignIn,
                 onDisconnectCloudSync = {
-                    signOutFromGoogle(credentialManager, scope)
+                    signOutFromGoogle(context, credentialManager, scope)
                 }
             )
         }
@@ -246,6 +465,7 @@ private fun CricBidArenaFlow(
     onRememberRoomCode: (String) -> Unit,
     profileErrorMessage: String?,
     isCloudConnected: Boolean,
+    forceOfflineGuestMode: Boolean,
     onSaveProfile: (username: String, avatarId: String, favoriteTeam: String, newPassword: String?) -> Boolean,
     onRecordMatchOutcome: (won: Boolean, wonTrophy: Boolean) -> Unit,
     onSignOutToWelcome: () -> Unit,
@@ -261,14 +481,28 @@ private fun CricBidArenaFlow(
                 val app = checkNotNull(this[APPLICATION_KEY]) {
                     "APPLICATION_KEY missing from CreationExtras"
                 }
-                val databaseId = app.getString(R.string.firestore_database_id)
-                val db = FirebaseFirestore.getInstance(databaseId)
-                val dataSource = AuctionRepository(
-                    db = db,
-                    activeActorId = currentUserId,
-                    initialRecentRoomCodes = initialRecentRoomCodes,
-                    onRememberRoomCode = onRememberRoomCode
-                )
+                val dataSource: AuctionDataSource = if (forceOfflineGuestMode) {
+                    LocalAuctionRepository(app, currentUserId)
+                } else {
+                    try {
+                        val db = FirebaseSafeInit.safeFirestore(app)
+                        val firebaseAuth = FirebaseSafeInit.safeFirebaseAuth(app)
+                        if (db != null && firebaseAuth != null) {
+                            AuctionRepository(
+                                db = db,
+                                activeActorId = currentUserId,
+                                initialRecentRoomCodes = initialRecentRoomCodes,
+                                onRememberRoomCode = onRememberRoomCode,
+                                auth = firebaseAuth
+                            )
+                        } else {
+                            LocalAuctionRepository(app, currentUserId)
+                        }
+                    } catch (t: Throwable) {
+                        Log.w(MAIN_ACTIVITY_TAG, "Falling back to LocalAuctionRepository: ${t.message}")
+                        LocalAuctionRepository(app, currentUserId)
+                    }
+                }
                 CricBidViewModel(
                     repository = dataSource,
                     currentUserId = currentUserId,
