@@ -1,14 +1,10 @@
 package com.example
 
-import android.Manifest
-import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -71,8 +67,6 @@ import com.example.data.local.LocalProfileStore
 import com.example.data.model.CareerMatchType
 import com.example.data.model.MatchStage
 import com.example.data.model.RoomStatus
-import com.example.notifications.CricBidNotificationManager
-import com.example.notifications.NotificationAlertEvaluator
 import com.example.ui.screens.CareerScreen
 import com.example.ui.screens.HomeLobbyScreen
 import com.example.ui.screens.InternationalScreen
@@ -540,34 +534,6 @@ private fun CricBidArenaFlow(
         }
     )
 
-    val context = LocalContext.current
-    val notificationManager = remember(context) { CricBidNotificationManager(context) }
-    var notificationPrefs by remember { mutableStateOf(notificationManager.loadPreferences()) }
-    var hasNotificationPermission by remember { mutableStateOf(notificationManager.hasNotificationPermission()) }
-    var promptedNotifOnce by rememberSaveable { mutableStateOf(false) }
-
-    val notificationPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        hasNotificationPermission = granted || notificationManager.hasNotificationPermission()
-        if (hasNotificationPermission) {
-            viewModel.showMessage("Local alerts enabled! You'll be alerted for auction turns & match kickoffs.")
-        } else {
-            viewModel.showMessage("Notifications denied. You can enable them anytime in Profile settings.")
-        }
-    }
-
-    val requestNotificationPermissionIfNeeded: () -> Unit = {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !notificationManager.hasNotificationPermission()) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            hasNotificationPermission = notificationManager.hasNotificationPermission()
-        }
-    }
-
-    var lastObservedLotId by remember { mutableStateOf<String?>(null) }
-    var lastObservedHighestBidderTeamId by remember { mutableStateOf<String?>(null) }
-
     var inInternationalHub by rememberSaveable { mutableStateOf(false) }
     var inCareerMode by rememberSaveable { mutableStateOf(false) }
     var inProfileScreen by rememberSaveable { mutableStateOf(false) }
@@ -582,56 +548,6 @@ private fun CricBidArenaFlow(
     val matchSimState by matchSimViewModel.uiState.collectAsStateWithLifecycle()
     val internationalState by internationalViewModel.uiState.collectAsStateWithLifecycle()
     val careerState by careerViewModel.uiState.collectAsStateWithLifecycle()
-
-    // Request POST_NOTIFICATIONS cleanly once when user enters an active auction room on Android 13+
-    LaunchedEffect(activeState.activeRoomCode) {
-        if (activeState.activeRoomCode != null && !promptedNotifOnce && notificationPrefs.enabled) {
-            promptedNotifOnce = true
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !notificationManager.hasNotificationPermission()) {
-                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            }
-        }
-    }
-
-    // Trigger local notifications when user's auction turn starts (retention turn, new lot, or outbid)
-    LaunchedEffect(
-        activeState.room?.roomCode,
-        activeState.room?.status,
-        activeState.room?.currentPlayerIndex,
-        activeState.room?.highestBidderTeamId,
-        activeState.room?.currentBidLakhs
-    ) {
-        val room = activeState.room ?: return@LaunchedEffect
-        val alert = NotificationAlertEvaluator.evaluateAuctionTurnAlert(
-            room = room,
-            currentUserId = currentUserId,
-            previousHighestBidderTeamId = lastObservedHighestBidderTeamId,
-            previousLotId = lastObservedLotId
-        )
-        if (alert != null) {
-            notificationManager.postAlert(alert)
-        }
-        if (room.roomStatus == RoomStatus.AUCTION) {
-            lastObservedLotId = room.currentCricketer?.id
-            lastObservedHighestBidderTeamId = room.highestBidderTeamId
-        } else {
-            lastObservedLotId = null
-            lastObservedHighestBidderTeamId = null
-        }
-    }
-
-    // Trigger local notification when a match involving the user is ready in Match Hub
-    LaunchedEffect(activeState.room?.roomCode, activeState.room?.status, activeState.matches.size) {
-        val room = activeState.room ?: return@LaunchedEffect
-        val matchAlert = NotificationAlertEvaluator.evaluateUpcomingMatchAlert(
-            room = room,
-            matches = activeState.matches,
-            currentUserId = currentUserId
-        )
-        if (matchAlert != null) {
-            notificationManager.postAlert(matchAlert)
-        }
-    }
 
     LaunchedEffect(activeState.snackbarMessage) {
         val msg = activeState.snackbarMessage
@@ -864,19 +780,6 @@ private fun CricBidArenaFlow(
                     backupCode = backupCode,
                     isCloudConnected = isCloudConnected,
                     errorMessage = profileErrorMessage,
-                    notificationPrefs = notificationPrefs,
-                    hasNotificationPermission = hasNotificationPermission,
-                    onUpdateNotificationPrefs = { updated ->
-                        notificationPrefs = updated
-                        notificationManager.savePreferences(updated)
-                    },
-                    onRequestNotificationPermission = requestNotificationPermissionIfNeeded,
-                    onSendTestNotification = {
-                        val sent = notificationManager.sendTestAlert()
-                        viewModel.showMessage(
-                            if (sent) "Test notification sent!" else "Enable notifications permission to preview alerts."
-                        )
-                    },
                     onBack = { inProfileScreen = false },
                     onSaveProfile = { newUsername, newAvatarId, newFavTeam, newPassword ->
                         val ok = onSaveProfile(newUsername, newAvatarId, newFavTeam, newPassword)
@@ -1020,15 +923,6 @@ private fun CricBidArenaFlow(
                     onSelectOpponentNation = { id -> internationalViewModel.selectOpponentNation(id) },
                     onSelectSeriesLength = { count -> internationalViewModel.selectSeriesLength(count) },
                     onStartMatch = { teamA, teamB, stage, format ->
-                        notificationManager.postAlert(
-                            NotificationAlertEvaluator.buildMatchKickoffAlert(
-                                teamAName = teamA.teamName,
-                                teamBName = teamB.teamName,
-                                stageLabel = stage.label,
-                                formatLabel = format.shortLabel,
-                                uniqueKey = "intl_${teamA.teamId}_${teamB.teamId}_${System.currentTimeMillis() / 10000}"
-                            )
-                        )
                         activeMatchIsInternational = true
                         matchSimViewModel.startNewMatch(
                             teamA = teamA,
@@ -1062,15 +956,6 @@ private fun CricBidArenaFlow(
                         val prepared = careerViewModel.prepareLiveMatch(matchType)
                         if (prepared != null) {
                             val (myTeam, oppTeam, oppOffset) = prepared
-                            notificationManager.postAlert(
-                                NotificationAlertEvaluator.buildMatchKickoffAlert(
-                                    teamAName = myTeam.teamName,
-                                    teamBName = oppTeam.teamName,
-                                    stageLabel = matchType.label,
-                                    formatLabel = matchType.format.shortLabel,
-                                    uniqueKey = "career_${myTeam.teamName}_${oppTeam.teamName}_${System.currentTimeMillis() / 10000}"
-                                )
-                            )
                             careerMatchRecordedKey = null
                             activeCareerMatchType = matchType
                             activeMatchIsInternational = false
@@ -1233,17 +1118,6 @@ private fun CricBidArenaFlow(
                                 viewModel.setEditingXi(true)
                                 return@MatchHubScreen
                             }
-                        }
-                        if (myActiveTeam != null) {
-                            notificationManager.postAlert(
-                                NotificationAlertEvaluator.buildMatchKickoffAlert(
-                                    teamAName = teamA.teamName,
-                                    teamBName = teamB.teamName,
-                                    stageLabel = stage.label,
-                                    formatLabel = "T20",
-                                    uniqueKey = "ipl_${activeRoom.roomCode}_${teamA.teamId}_${teamB.teamId}_${System.currentTimeMillis() / 10000}"
-                                )
-                            )
                         }
                         activeMatchIsInternational = false
                         matchSimViewModel.startNewMatch(

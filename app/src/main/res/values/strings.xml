@@ -24,9 +24,4 @@
     <string name="career_mode_title">Career Mode</string>
     <string name="career_mode_subtitle">Road to Legend • Domestic → IPL Auction → Intl Captain → Hall of Fame</string>
     <string name="career_difficulty_label">Career Difficulty</string>
-    <string name="notif_channel_auction_name">Auction Turn Alerts</string>
-    <string name="notif_channel_auction_desc">Alerts when a new auction lot opens, you are outbid, or your retention turn starts.</string>
-    <string name="notif_channel_match_name">Match Kickoff Alerts</string>
-    <string name="notif_channel_match_desc">Alerts when a match involving your team is ready or about to begin.</string>
-    <string name="notif_settings_title">Local Alerts &amp; Notifications</string>
 </resources>

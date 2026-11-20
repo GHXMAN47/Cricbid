@@ -25,7 +25,6 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Shield
@@ -40,8 +39,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -64,7 +61,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.AccountProfile
-import com.example.notifications.NotificationPreferences
 import com.example.ui.components.IndianPlayerAvatar
 import com.example.ui.components.IndianPlayerAvatarSpec
 import com.example.ui.components.IndianPlayerAvatars
@@ -89,11 +85,6 @@ fun ProfileScreen(
     backupCode: String,
     isCloudConnected: Boolean,
     errorMessage: String?,
-    notificationPrefs: NotificationPreferences = NotificationPreferences(),
-    hasNotificationPermission: Boolean = true,
-    onUpdateNotificationPrefs: (NotificationPreferences) -> Unit = {},
-    onRequestNotificationPermission: () -> Unit = {},
-    onSendTestNotification: () -> Unit = {},
     onBack: () -> Unit,
     onSaveProfile: (username: String, avatarId: String, favoriteTeam: String, newPassword: String?) -> Unit,
     onCopyBackupCode: () -> Unit,
@@ -509,169 +500,6 @@ fun ProfileScreen(
                                         style = MaterialTheme.typography.labelSmall.copy(color = TurfEmerald, fontWeight = FontWeight.Bold)
                                     )
                                 }
-                            }
-                        }
-                    }
-                }
-
-                // Local Alerts & Notifications Card
-                item {
-                    Surface(
-                        color = NavySurface,
-                        shape = RoundedCornerShape(18.dp),
-                        border = BorderStroke(1.dp, BoundarySky.copy(alpha = 0.45f)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Filled.NotificationsActive,
-                                        contentDescription = null,
-                                        tint = BoundarySky,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(
-                                        text = "LOCAL ALERTS & NOTIFICATIONS",
-                                        style = MaterialTheme.typography.labelMedium.copy(
-                                            color = BoundarySky,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    )
-                                }
-                                Text(
-                                    text = if (hasNotificationPermission) "ACTIVE" else "NEED PERMISSION",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontFamily = MonoFontFamily,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (hasNotificationPermission) TurfEmerald else AuctionGold
-                                    )
-                                )
-                            }
-
-                            Text(
-                                text = "Get local device alerts when your auction bidding turn starts (new lot / outbid) or a match involving your team is about to begin.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = BroadcastSilver
-                            )
-
-                            if (!hasNotificationPermission) {
-                                Button(
-                                    onClick = onRequestNotificationPermission,
-                                    colors = ButtonDefaults.buttonColors(containerColor = AuctionGold, contentColor = NavyMidnight),
-                                    shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(48.dp)
-                                        .testTag("profile_grant_notif_permission_button")
-                                ) {
-                                    Text("Allow Local Notifications", fontWeight = FontWeight.Bold)
-                                }
-                            }
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "Auction Turn Alerts",
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                                        color = BroadcastWhite
-                                    )
-                                    Text(
-                                        text = "New lot open, outbid counter-turn & retention turn",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = BroadcastMuted
-                                    )
-                                }
-                                Switch(
-                                    checked = notificationPrefs.enabled && notificationPrefs.auctionTurnAlerts,
-                                    onCheckedChange = { checked ->
-                                        if (checked && !hasNotificationPermission) {
-                                            onRequestNotificationPermission()
-                                        }
-                                        onUpdateNotificationPrefs(
-                                            notificationPrefs.copy(
-                                                enabled = checked || notificationPrefs.matchStartAlerts,
-                                                auctionTurnAlerts = checked
-                                            )
-                                        )
-                                    },
-                                    colors = SwitchDefaults.colors(
-                                        checkedThumbColor = OnEmeraldDark,
-                                        checkedTrackColor = TurfEmerald
-                                    ),
-                                    modifier = Modifier.testTag("toggle_auction_turn_alerts")
-                                )
-                            }
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "Match Kickoff Alerts",
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                                        color = BroadcastWhite
-                                    )
-                                    Text(
-                                        text = "Upcoming fixture ready & match starting now",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = BroadcastMuted
-                                    )
-                                }
-                                Switch(
-                                    checked = notificationPrefs.enabled && notificationPrefs.matchStartAlerts,
-                                    onCheckedChange = { checked ->
-                                        if (checked && !hasNotificationPermission) {
-                                            onRequestNotificationPermission()
-                                        }
-                                        onUpdateNotificationPrefs(
-                                            notificationPrefs.copy(
-                                                enabled = checked || notificationPrefs.auctionTurnAlerts,
-                                                matchStartAlerts = checked
-                                            )
-                                        )
-                                    },
-                                    colors = SwitchDefaults.colors(
-                                        checkedThumbColor = OnEmeraldDark,
-                                        checkedTrackColor = TurfEmerald
-                                    ),
-                                    modifier = Modifier.testTag("toggle_match_kickoff_alerts")
-                                )
-                            }
-
-                            OutlinedButton(
-                                onClick = {
-                                    if (!hasNotificationPermission) {
-                                        onRequestNotificationPermission()
-                                    } else {
-                                        onSendTestNotification()
-                                    }
-                                },
-                                border = BorderStroke(1.dp, TurfEmerald.copy(alpha = 0.65f)),
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(48.dp)
-                                    .testTag("profile_send_test_notification_button")
-                            ) {
-                                Text(
-                                    text = "Send Test Notification",
-                                    style = MaterialTheme.typography.labelMedium.copy(color = TurfEmerald, fontWeight = FontWeight.Bold)
-                                )
                             }
                         }
                     }
