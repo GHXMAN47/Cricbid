@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.EmojiEvents
@@ -46,16 +48,21 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.BatEquipmentPreset
 import com.example.data.model.BattingStyle
 import com.example.data.model.BowlingStyle
 import com.example.data.model.CareerDifficulty
+import com.example.data.model.CareerPlayerAppearance
 import com.example.data.model.CurrencyFormatter
+import com.example.data.model.FacialFeaturePreset
+import com.example.data.model.HairstylePreset
 import com.example.data.model.HallOfFameLegend
 import com.example.data.model.InternationalNations
+import com.example.data.model.KitThemePreset
 import com.example.data.model.PlayerRole
 import com.example.engine.CareerEngine
 import com.example.engine.IplAuctionDraftOutcome
-import com.example.ui.components.IndianPlayerAvatar
+import com.example.ui.components.CareerPlayerPortrait
 import com.example.ui.components.IndianPlayerAvatars
 import com.example.ui.components.RolePillBadge
 import com.example.ui.theme.AuctionGold
@@ -65,7 +72,6 @@ import com.example.ui.theme.BroadcastSilver
 import com.example.ui.theme.BroadcastWhite
 import com.example.ui.theme.DisplayFontFamily
 import com.example.ui.theme.MonoFontFamily
-import com.example.ui.theme.NavyMidnight
 import com.example.ui.theme.NavyOutline
 import com.example.ui.theme.NavySurface
 import com.example.ui.theme.NavySurfaceHigh
@@ -85,7 +91,8 @@ internal fun RookieCreatorContent(
         role: PlayerRole,
         battingStyle: BattingStyle,
         bowlingStyle: BowlingStyle,
-        difficulty: CareerDifficulty
+        difficulty: CareerDifficulty,
+        appearance: CareerPlayerAppearance
     ) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -93,11 +100,23 @@ internal fun RookieCreatorContent(
     var startingAge by rememberSaveable { mutableIntStateOf(18) }
     var countryCode by rememberSaveable { mutableStateOf("IND") }
     var avatarId by rememberSaveable { mutableStateOf(IndianPlayerAvatars.DEFAULT_ID) }
+    var hairstyle by rememberSaveable { mutableStateOf(HairstylePreset.SHORT_FADE) }
+    var facialFeature by rememberSaveable { mutableStateOf(FacialFeaturePreset.LIGHT_STUBBLE) }
+    var kitTheme by rememberSaveable { mutableStateOf(KitThemePreset.ROYAL_BLUE) }
+    var batStyle by rememberSaveable { mutableStateOf(BatEquipmentPreset.ENGLISH_WILLOW) }
+    var jerseyNumber by rememberSaveable { mutableIntStateOf(18) }
     var role by rememberSaveable { mutableStateOf(PlayerRole.BATTER) }
     var battingStyle by rememberSaveable { mutableStateOf(BattingStyle.RIGHT_HAND_BAT) }
     var bowlingStyle by rememberSaveable { mutableStateOf(BowlingStyle.OCCASIONAL_MEDIUM) }
     var difficulty by rememberSaveable { mutableStateOf(CareerDifficulty.NORMAL) }
 
+    val appearance = CareerPlayerAppearance(
+        hairstyle = hairstyle,
+        facialFeature = facialFeature,
+        kitTheme = kitTheme,
+        batStyle = batStyle,
+        jerseyNumber = jerseyNumber
+    )
     val selectedNation = InternationalNations.all.firstOrNull { it.code == countryCode } ?: InternationalNations.all.first()
     val preview = CareerEngine.createRookie(
         name = name,
@@ -108,7 +127,8 @@ internal fun RookieCreatorContent(
         role = role,
         battingStyle = battingStyle,
         bowlingStyle = bowlingStyle,
-        difficulty = difficulty
+        difficulty = difficulty,
+        appearance = appearance
     )
 
     LazyColumn(
@@ -116,24 +136,31 @@ internal fun RookieCreatorContent(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // Live Custom Cricketer Card Preview
         item {
             Surface(
                 color = NavySurface,
                 shape = RoundedCornerShape(18.dp),
-                border = BorderStroke(1.2.dp, AuctionGold.copy(alpha = 0.55f)),
+                border = BorderStroke(1.2.dp, AuctionGold.copy(alpha = 0.6f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
                     modifier = Modifier.padding(14.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IndianPlayerAvatar(avatarId = avatarId, size = 58.dp, selected = true)
+                    CareerPlayerPortrait(
+                        appearance = appearance,
+                        size = 72.dp,
+                        showJerseyNumber = true
+                    )
                     Spacer(Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = name.trim().ifBlank { "Rookie Star" },
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = BroadcastWhite
+                            color = BroadcastWhite,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Text(
                             text = "Age $startingAge • ${selectedNation.name} • ${role.displayName}",
@@ -141,10 +168,15 @@ internal fun RookieCreatorContent(
                             color = BroadcastSilver
                         )
                         Text(
+                            text = "Starts at ${preview.clubTeamName}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TurfEmerald
+                        )
+                        Text(
                             text = "BAT ${preview.attributes.battingRating} • BOWL ${preview.attributes.bowlingRating} • FLD ${preview.attributes.fieldingRating}",
                             style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
                             color = BoundarySky,
-                            modifier = Modifier.padding(top = 3.dp)
+                            modifier = Modifier.padding(top = 2.dp)
                         )
                     }
                     Surface(
@@ -168,7 +200,7 @@ internal fun RookieCreatorContent(
             }
         }
 
-        // Name & Starting Age
+        // Identity: Name, Age, Jersey Number
         item {
             Surface(
                 color = NavySurface,
@@ -177,7 +209,7 @@ internal fun RookieCreatorContent(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("CREATE YOUR ROOKIE", style = MaterialTheme.typography.labelMedium, color = TurfEmerald)
+                    Text("CREATE YOUR OWN CRICKETER", style = MaterialTheme.typography.labelMedium, color = TurfEmerald)
                     OutlinedTextField(
                         value = name,
                         onValueChange = { if (it.length <= 28) name = it },
@@ -205,48 +237,108 @@ internal fun RookieCreatorContent(
                             )
                         }
                     }
-                }
-            }
-        }
-
-        // Avatar Picker
-        item {
-            Surface(
-                color = NavySurface,
-                shape = RoundedCornerShape(16.dp),
-                border = BorderStroke(1.dp, NavyOutline),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("PLAYER AVATAR", style = MaterialTheme.typography.labelSmall, color = AuctionGold)
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        items(IndianPlayerAvatars.all, key = { it.id }) { av ->
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .clickable { avatarId = av.id }
-                                    .padding(4.dp)
-                            ) {
-                                IndianPlayerAvatar(
-                                    avatarId = av.id,
-                                    size = 48.dp,
-                                    selected = avatarId == av.id,
-                                    showJerseyPill = false
-                                )
-                                Text(
-                                    text = av.playerName.substringAfterLast(" "),
-                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                    color = if (avatarId == av.id) AuctionGold else BroadcastMuted
-                                )
-                            }
+                    Text("JERSEY NUMBER", style = MaterialTheme.typography.labelSmall, color = BroadcastMuted)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(listOf(7, 10, 18, 23, 33, 45, 77, 93, 99)) { num ->
+                            CareerSelectChip(
+                                label = "#$num",
+                                selected = jerseyNumber == num,
+                                accent = AuctionGold,
+                                onClick = { jerseyNumber = num }
+                            )
                         }
                     }
                 }
             }
         }
 
-        // Nationality & Role & Styles
+        // Appearance & Equipment Customizer (Hairstyle, Facial Features, Jersey/Kit, Bat Style)
+        item {
+            Surface(
+                color = NavySurface,
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, AuctionGold.copy(alpha = 0.45f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("APPEARANCE & EQUIPMENT", style = MaterialTheme.typography.labelMedium, color = AuctionGold)
+
+                    Text("HAIRSTYLE", style = MaterialTheme.typography.labelSmall, color = BroadcastMuted)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(HairstylePreset.entries) { h ->
+                            CareerSelectChip(
+                                label = h.label,
+                                selected = hairstyle == h,
+                                accent = AuctionGold,
+                                onClick = { hairstyle = h }
+                            )
+                        }
+                    }
+
+                    Text("FACIAL FEATURES", style = MaterialTheme.typography.labelSmall, color = BroadcastMuted)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(FacialFeaturePreset.entries) { f ->
+                            CareerSelectChip(
+                                label = f.label,
+                                selected = facialFeature == f,
+                                accent = BoundarySky,
+                                onClick = { facialFeature = f }
+                            )
+                        }
+                    }
+
+                    Text("JERSEY & KIT THEME", style = MaterialTheme.typography.labelSmall, color = BroadcastMuted)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(KitThemePreset.entries) { kit ->
+                            val selected = kitTheme == kit
+                            Surface(
+                                color = if (selected) Color(kit.primaryArgb).copy(alpha = 0.28f) else NavySurfaceHigh,
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.2.dp, if (selected) Color(kit.accentArgb) else NavyOutline),
+                                modifier = Modifier
+                                    .height(40.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { kitTheme = kit }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(12.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(kit.primaryArgb))
+                                    )
+                                    Text(
+                                        text = kit.label,
+                                        style = MaterialTheme.typography.labelMedium.copy(
+                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (selected) BroadcastWhite else BroadcastSilver
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Text("BAT & EQUIPMENT STYLE", style = MaterialTheme.typography.labelSmall, color = BroadcastMuted)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(BatEquipmentPreset.entries) { bat ->
+                            CareerSelectChip(
+                                label = bat.label,
+                                selected = batStyle == bat,
+                                accent = Color(bat.stickerArgb),
+                                onClick = { batStyle = bat }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Nationality, Playing Role & Batting/Bowling Styles
         item {
             Surface(
                 color = NavySurface,
@@ -267,7 +359,7 @@ internal fun RookieCreatorContent(
                         }
                     }
 
-                    Text("PRIMARY ROLE (STARTS 55–62 OVR)", style = MaterialTheme.typography.labelSmall, color = TurfEmerald)
+                    Text("PLAYING ROLE (STARTS 55–62 OVR)", style = MaterialTheme.typography.labelSmall, color = TurfEmerald)
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(PlayerRole.entries) { r ->
                             val roleLabel = when (r) {
@@ -319,7 +411,7 @@ internal fun RookieCreatorContent(
             }
         }
 
-        // Career Difficulty Selector (Easy / Normal / Hard)
+        // Career Difficulty Selector
         item {
             Surface(
                 color = NavySurface,
@@ -366,7 +458,8 @@ internal fun RookieCreatorContent(
                         role,
                         battingStyle,
                         bowlingStyle,
-                        difficulty
+                        difficulty,
+                        appearance
                     )
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = TurfEmerald, contentColor = OnEmeraldDark),
@@ -379,7 +472,7 @@ internal fun RookieCreatorContent(
                 Icon(Icons.Filled.SportsCricket, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = "Begin Road to Legend (${difficulty.label})",
+                    text = "Start at Hometown Club (${difficulty.label})",
                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                 )
             }
@@ -405,7 +498,7 @@ internal fun IplAuctionDraftSummaryCard(
                 Icon(Icons.Filled.Gavel, contentDescription = null, tint = AuctionGold, modifier = Modifier.size(22.dp))
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = "IPL AUCTION RESULT — SOLD!",
+                    text = "${draft.league.displayName.uppercase()} DRAFT RESULT — SOLD!",
                     style = MaterialTheme.typography.titleMedium.copy(fontFamily = DisplayFontFamily, color = AuctionGold)
                 )
             }
@@ -421,7 +514,9 @@ internal fun IplAuctionDraftSummaryCard(
                 onClick = onDismiss,
                 colors = ButtonDefaults.buttonColors(containerColor = AuctionGold, contentColor = OnGoldDark),
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
             ) {
                 Text("Join ${draft.winningFranchise}", fontWeight = FontWeight.Bold)
             }
@@ -460,7 +555,11 @@ internal fun RetirementSummaryCard(
                         style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.sp),
                         color = AuctionGold
                     )
-                    IndianPlayerAvatar(avatarId = legend.avatarId, size = 72.dp, selected = true)
+                    CareerPlayerPortrait(
+                        appearance = legend.appearance,
+                        size = 76.dp,
+                        isCaptain = legend.wasCaptain
+                    )
                     Text(
                         text = "${legend.name}${if (legend.wasCaptain) " (C)" else ""}",
                         style = MaterialTheme.typography.headlineMedium.copy(fontFamily = DisplayFontFamily, color = BroadcastWhite)
@@ -491,7 +590,7 @@ internal fun RetirementSummaryCard(
                     }
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        text = "Inducted into the CricBid Legends Pool! ${legend.name} is now eligible to appear in future IPL Auctions.",
+                        text = "Inducted into the CricBid Legends Pool! ${legend.name} is now eligible to appear in future Management Auctions.",
                         style = MaterialTheme.typography.bodySmall,
                         color = BroadcastWhite
                     )
@@ -539,7 +638,7 @@ internal fun HallOfFameListContent(
                         Icon(Icons.Filled.EmojiEvents, contentDescription = null, tint = AuctionGold, modifier = Modifier.size(34.dp))
                         Text("No Hall of Fame Legends Yet", style = MaterialTheme.typography.titleMedium, color = BroadcastWhite)
                         Text(
-                            text = "Complete a Career Mode journey and retire your player to enshrine them here and unlock them in future IPL Auctions!",
+                            text = "Complete a Player Career journey and retire your cricketer to enshrine them here and unlock them in future Management Auctions!",
                             style = MaterialTheme.typography.bodySmall,
                             color = BroadcastSilver
                         )
@@ -558,7 +657,12 @@ internal fun HallOfFameListContent(
                 ) {
                     Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            IndianPlayerAvatar(avatarId = legend.avatarId, size = 48.dp, selected = true, showJerseyPill = false)
+                            CareerPlayerPortrait(
+                                appearance = legend.appearance,
+                                size = 52.dp,
+                                showJerseyNumber = false,
+                                isCaptain = legend.wasCaptain
+                            )
                             Spacer(Modifier.width(10.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -572,7 +676,7 @@ internal fun HallOfFameListContent(
                                     RolePillBadge(role = legend.role)
                                 }
                                 Text(
-                                    text = "${legend.nationality} • Peak ${legend.peakOverall} OVR • ${legend.seasonsPlayed} Seasons • ${legend.difficulty.shortBadge}",
+                                    text = "${legend.nationality} • Peak ${legend.peakOverall} OVR • ${legend.seasonsPlayed} Seasons • ${legend.achievementsCount}/6 Badges",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = AuctionGold
                                 )
@@ -589,7 +693,7 @@ internal fun HallOfFameListContent(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "Include in Future Auctions",
+                                text = "Include in Future Management Auctions",
                                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
                                 color = TurfEmerald
                             )

@@ -2,17 +2,23 @@ package com.example.engine
 
 import com.example.data.model.BattingStyle
 import com.example.data.model.BowlingStyle
+import com.example.data.model.CareerAchievementId
 import com.example.data.model.CareerDifficulty
 import com.example.data.model.CareerMatchLog
+import com.example.data.model.CareerMatchObjective
 import com.example.data.model.CareerMatchType
+import com.example.data.model.CareerPlayerAppearance
 import com.example.data.model.CareerPlayerAttributes
 import com.example.data.model.CareerSaveState
+import com.example.data.model.CareerSkillStat
 import com.example.data.model.CareerStage
 import com.example.data.model.CricketerDatabase
 import com.example.data.model.CurrencyFormatter
 import com.example.data.model.HallOfFameLegend
 import com.example.data.model.InternationalNations
+import com.example.data.model.MatchFormat
 import com.example.data.model.PlayerRole
+import com.example.data.model.ProT20League
 import com.example.data.model.SquadRuleValidator
 import com.example.data.model.TeamState
 import com.example.data.model.TrainingDrill
@@ -30,7 +36,8 @@ data class IplAuctionDraftOutcome(
     val updatedCareer: CareerSaveState,
     val winningFranchise: String,
     val finalBidLakhs: Long,
-    val biddingHighlights: List<String>
+    val biddingHighlights: List<String>,
+    val league: ProT20League = ProT20League.IPL
 )
 
 data class CareerMatchResolution(
@@ -38,16 +45,29 @@ data class CareerMatchResolution(
     val summaryMessage: String,
     val milestoneBanner: String? = null,
     val newlyUnlockedStage: String? = null,
+    val newlyUnlockedAchievements: List<CareerAchievementId> = emptyList(),
+    val objectivePassed: Boolean = false,
     val retirementPromptTriggered: Boolean = false
 )
 
 /**
- * Pure Kotlin engine for single-player "Career Mode (Road to Legend)".
- * Drives rookie creation (55-62 OVR), training drills with fatigue/injury tradeoffs,
- * Stage 1 (Domestic) -> Stage 2 (IPL Auction & Franchise) -> Stage 3 (International + Captaincy),
- * real MatchSimulationEngine team construction, and Retirement -> Hall of Fame Legend induction.
+ * Pure Kotlin engine for Cricket 26-style single-player "Player Career Mode (Road to Legend)".
+ * Drives custom player creation (appearance + styles, 55-62 OVR), 5-stage ladder:
+ * Hometown Club -> Domestic (First-Class & Limited-Overs) -> Pro T20 Leagues (IPL/PSL/BBL/The Hundred)
+ * -> International Debut (T20I / 50-Over ODI / Test / World Cups) -> Team Captaincy -> Hall of Fame.
  */
 object CareerEngine {
+
+    private val clubSidesByCountry = mapOf(
+        "IND" to listOf("Shivaji Park Club XI", "Maidan Strikers CC", "Gymkhana Colts CC", "Dadar Union CC", "Chepauk Town CC"),
+        "AUS" to listOf("Sydney Grade CC", "Melbourne Club XI", "Brisbane Valley CC", "Perth Suburban CC"),
+        "ENG" to listOf("Richmond Green CC", "Yorkshire Town CC", "Surrey Village CC", "Bristol Rovers CC"),
+        "RSA" to listOf("Wanderers Club XI", "Cape Town CC", "Durban Bay CC", "Pretoria Colts CC"),
+        "NZ" to listOf("Eden Park Club XI", "Wellington Harbour CC", "Christchurch Town CC", "Otago Club XI"),
+        "WI" to listOf("Bridgetown Club XI", "Port of Spain CC", "Kingston Town CC", "Georgetown CC"),
+        "SL" to listOf("Colombo Colts CC", "Kandy Town CC", "Galle Fort CC", "Moratuwa Club XI"),
+        "PAK" to listOf("Lahore Gymkhana CC", "Karachi Club XI", "Pindi Colts CC", "Multan Town CC")
+    )
 
     private val domesticSidesByCountry = mapOf(
         "IND" to listOf("Mumbai Emerging XI", "Karnataka Challengers", "Delhi Colts", "Tamil Nadu XI", "Punjab Rising", "Bengal Tigers"),
@@ -60,17 +80,6 @@ object CareerEngine {
         "PAK" to listOf("Lahore Blues XI", "Karachi Whites", "Multan Emerging", "Rawalpindi Rams")
     )
 
-    private val iplFranchises = listOf(
-        "Mumbai Mavericks",
-        "Chennai Super Chargers",
-        "Bengaluru Challengers",
-        "Kolkata Knights",
-        "Hyderabad Sunrisers",
-        "Rajasthan Royals XI",
-        "Delhi Capitals XI",
-        "Gujarat Titans XI"
-    )
-
     fun createRookie(
         name: String,
         startingAge: Int,
@@ -80,7 +89,8 @@ object CareerEngine {
         role: PlayerRole,
         battingStyle: BattingStyle,
         bowlingStyle: BowlingStyle,
-        difficulty: CareerDifficulty = CareerDifficulty.NORMAL
+        difficulty: CareerDifficulty = CareerDifficulty.NORMAL,
+        appearance: CareerPlayerAppearance = CareerPlayerAppearance()
     ): CareerSaveState {
         val cleanName = name.trim().take(28).ifBlank { "Rookie Star" }
         val clampedAge = startingAge.coerceIn(17, 23)
@@ -116,9 +126,10 @@ object CareerEngine {
                 fielding = 58
             )
         }
+        val clubList = clubSidesByCountry[countryCode] ?: clubSidesByCountry["IND"]!!
         val domesticList = domesticSidesByCountry[countryCode] ?: domesticSidesByCountry["IND"]!!
         val id = "hof_${UUID.randomUUID().toString().replace("-", "").take(10)}"
-        val career = CareerSaveState(
+        val baseCareer = CareerSaveState(
             id = id,
             name = cleanName,
             startingAge = clampedAge,
@@ -127,17 +138,180 @@ object CareerEngine {
             nationality = nationality,
             countryCode = countryCode,
             avatarId = avatarId,
+            appearance = appearance,
             role = role,
             battingStyle = battingStyle,
             bowlingStyle = bowlingStyle,
             attributes = attrs,
+            skillPoints = 2,
+            selectionMeter = 65,
             difficulty = difficulty,
+            stage = CareerStage.CLUB_CRICKET,
+            clubTeamName = clubList.first(),
             domesticTeamName = domesticList.first(),
             nationalTeamName = nationality,
             peakOverall = attrs.overallFor(role)
         )
+        val career = baseCareer.copy(
+            currentObjective = generateMatchObjective(baseCareer, CareerMatchType.CLUB_T20)
+        )
         CricketerDatabase.registerActiveCareerPlayer(career.toCricketer())
         return career
+    }
+
+    fun generateMatchObjective(
+        career: CareerSaveState,
+        matchType: CareerMatchType
+    ): CareerMatchObjective {
+        val stageTier = when (career.stage) {
+            CareerStage.CLUB_CRICKET -> 0
+            CareerStage.DOMESTIC, CareerStage.IPL_AUCTION -> 1
+            CareerStage.IPL_FRANCHISE -> 2
+            CareerStage.INTERNATIONAL, CareerStage.RETIRED -> 3
+        }
+        val formatRunsScale = when (matchType.format) {
+            MatchFormat.T20I -> 0
+            MatchFormat.ODI -> 12
+            MatchFormat.TEST -> 18
+        }
+        val maxEcon = when (matchType.format) {
+            MatchFormat.T20I -> 8.0 - (stageTier * 0.25)
+            MatchFormat.ODI -> 5.8 - (stageTier * 0.2)
+            MatchFormat.TEST -> 3.8 - (stageTier * 0.15)
+        }
+        val bonusSp = if (stageTier >= 2 || matchType.isWorldChampionship) 2 else 1
+
+        return when (career.role) {
+            PlayerRole.BATTER -> {
+                val targetRuns = (28 + stageTier * 5 + formatRunsScale).coerceAtMost(75)
+                CareerMatchObjective(
+                    id = "obj_bat_${matchType.name}_${career.matchesPlayed}",
+                    title = "Anchor & Score $targetRuns+ Runs",
+                    description = "Score at least $targetRuns runs in this ${matchType.shortChip} fixture to boost your selection rating.",
+                    targetRuns = targetRuns,
+                    rewardSkillPoints = bonusSp,
+                    rewardSelectionBonus = 13
+                )
+            }
+            PlayerRole.WICKETKEEPER -> {
+                val targetRuns = (24 + stageTier * 4 + formatRunsScale).coerceAtMost(65)
+                CareerMatchObjective(
+                    id = "obj_wk_${matchType.name}_${career.matchesPlayed}",
+                    title = "Keeper-Batter: $targetRuns+ Runs",
+                    description = "Contribute $targetRuns+ vital runs in this ${matchType.shortChip} match to keep the gloves.",
+                    targetRuns = targetRuns,
+                    rewardSkillPoints = bonusSp,
+                    rewardSelectionBonus = 13
+                )
+            }
+            PlayerRole.ALL_ROUNDER -> {
+                val targetRuns = (22 + stageTier * 4 + (formatRunsScale / 2)).coerceAtMost(55)
+                val targetWkts = if (matchType.format == MatchFormat.TEST) 2 else 1
+                CareerMatchObjective(
+                    id = "obj_ar_${matchType.name}_${career.matchesPlayed}",
+                    title = "Dual Impact: $targetRuns+ Runs or $targetWkts+ Wkts",
+                    description = "Either score $targetRuns+ runs OR claim $targetWkts+ wicket(s) to impress selectors.",
+                    targetRuns = targetRuns,
+                    targetWickets = targetWkts,
+                    rewardSkillPoints = bonusSp,
+                    rewardSelectionBonus = 14
+                )
+            }
+            PlayerRole.SEAMER, PlayerRole.SPINNER -> {
+                val targetWkts = if (stageTier >= 2 || matchType.format != MatchFormat.T20I) 2 else 1
+                val roundedEcon = (Math.round(maxEcon * 10.0) / 10.0)
+                CareerMatchObjective(
+                    id = "obj_bwl_${matchType.name}_${career.matchesPlayed}",
+                    title = "Strike Spell: $targetWkts+ Wkts or ≤$roundedEcon RPO",
+                    description = "Claim $targetWkts+ wicket(s) OR keep economy at or below $roundedEcon RPO.",
+                    targetWickets = targetWkts,
+                    maxEconomy = roundedEcon,
+                    rewardSkillPoints = bonusSp,
+                    rewardSelectionBonus = 14
+                )
+            }
+        }
+    }
+
+    fun evaluateObjective(
+        objective: CareerMatchObjective,
+        runs: Int,
+        wickets: Int,
+        runsConceded: Int,
+        legalBallsBowled: Int
+    ): Boolean {
+        val econPassed = objective.maxEconomy != null && legalBallsBowled >= 6 &&
+            ((runsConceded.toDouble() / (legalBallsBowled.toDouble() / 6.0)) <= objective.maxEconomy)
+        val runsPassed = objective.targetRuns > 0 && runs >= objective.targetRuns
+        val wktsPassed = objective.targetWickets > 0 && wickets >= objective.targetWickets
+
+        return when {
+            objective.targetRuns > 0 && objective.targetWickets > 0 -> runsPassed || wktsPassed
+            objective.targetWickets > 0 && objective.maxEconomy != null -> wktsPassed || econPassed
+            objective.targetRuns > 0 -> runsPassed
+            objective.targetWickets > 0 -> wktsPassed
+            else -> runs >= 20 || wickets >= 1
+        }
+    }
+
+    fun spendSkillPoint(
+        career: CareerSaveState,
+        stat: CareerSkillStat
+    ): Pair<CareerSaveState, String> {
+        if (career.stage == CareerStage.RETIRED) {
+            return career to "Player has already retired to the Hall of Fame."
+        }
+        if (career.skillPoints <= 0) {
+            return career to "No Skill Points available. Complete matches & objectives to earn more!"
+        }
+        val currentVal = career.attributes.valueOf(stat)
+        if (currentVal >= 99) {
+            return career to "${stat.label} is already maxed at 99!"
+        }
+        val upgradedAttrs = career.attributes.upgrade(stat, delta = 2)
+        val newPeak = maxOf(career.peakOverall, upgradedAttrs.overallFor(career.role))
+        val updated = career.copy(
+            attributes = upgradedAttrs,
+            skillPoints = (career.skillPoints - 1).coerceAtLeast(0),
+            peakOverall = newPeak
+        )
+        CricketerDatabase.registerActiveCareerPlayer(updated.toCricketer())
+        return updated to "${stat.label} upgraded to ${upgradedAttrs.valueOf(stat)} (+2) • OVR ${updated.overallRating}"
+    }
+
+    fun runSelectionTrial(
+        career: CareerSaveState
+    ): Pair<CareerSaveState, String> {
+        if (!career.isDropped) {
+            return career to "You are already in the Playing XI!"
+        }
+        val updated = career.copy(
+            droppedMatchesRemaining = 0,
+            consecutivePoorMatches = 0,
+            selectionMeter = maxOf(career.selectionMeter, 50),
+            fatigue = (career.fatigue + 12).coerceIn(0, 100),
+            form = (career.form + 5).coerceIn(30, 100),
+            xp = career.xp + 20
+        )
+        CricketerDatabase.registerActiveCareerPlayer(updated.toCricketer())
+        return updated to "Impressive Net Trial! Selectors recalled ${career.name} to the Playing XI (Selection 50%)."
+    }
+
+    fun promoteToDomestic(career: CareerSaveState): CareerSaveState {
+        if (career.stage != CareerStage.CLUB_CRICKET) return career
+        val awards = (career.awards + "Domestic Call-Up (${career.domesticTeamName})").distinct()
+        val promoted = career.copy(
+            stage = CareerStage.DOMESTIC,
+            reputation = (career.reputation + 8).coerceAtMost(100),
+            selectionMeter = maxOf(career.selectionMeter, 66),
+            skillPoints = career.skillPoints + 1,
+            awards = awards
+        )
+        val withObjective = promoted.copy(
+            currentObjective = generateMatchObjective(promoted, CareerMatchType.DOMESTIC_T20)
+        )
+        CricketerDatabase.registerActiveCareerPlayer(withObjective.toCricketer())
+        return withObjective
     }
 
     fun applyTrainingDrill(
@@ -156,17 +330,12 @@ object CareerEngine {
         }
 
         val diff = career.difficulty
-        val attrs = career.attributes
-        var newTech = attrs.battingTechnique
-        var newPower = attrs.powerHitting
-        var newBowl = attrs.bowlingSkill
-        var newFld = attrs.fielding
+        var attrs = career.attributes
         var baseXpGain = 0
         val attrGain = diff.drillAttrGain
         val scaledFatigueDelta = if (drill.fatigueDelta > 0) {
             (drill.fatigueDelta * diff.fatigueMultiplier).toInt().coerceAtLeast(6)
         } else {
-            // Recovery is slightly stronger on Easy and slightly stricter on Hard
             when (diff) {
                 CareerDifficulty.EASY -> (drill.fatigueDelta - 6)
                 CareerDifficulty.NORMAL -> drill.fatigueDelta
@@ -180,22 +349,27 @@ object CareerEngine {
 
         when (drill) {
             TrainingDrill.BATTING_TECHNIQUE -> {
-                newTech = (newTech + attrGain).coerceAtMost(99)
+                attrs = attrs.upgrade(CareerSkillStat.BAT_TIMING, attrGain)
+                    .upgrade(CareerSkillStat.BAT_CONSISTENCY, attrGain)
                 baseXpGain = 30
                 newForm = (newForm + 3).coerceAtMost(100)
             }
             TrainingDrill.POWER_HITTING -> {
-                newPower = (newPower + attrGain).coerceAtMost(99)
+                attrs = attrs.upgrade(CareerSkillStat.BAT_POWER, attrGain)
                 baseXpGain = 35
                 newForm = (newForm + 2).coerceAtMost(100)
             }
             TrainingDrill.BOWLING_SKILL -> {
-                newBowl = (newBowl + attrGain).coerceAtMost(99)
+                attrs = attrs.upgrade(CareerSkillStat.BOWL_PACE_SPIN, attrGain)
+                    .upgrade(CareerSkillStat.BOWL_ACCURACY, attrGain)
+                    .upgrade(CareerSkillStat.BOWL_WICKET_TAKING, attrGain)
                 baseXpGain = 35
                 newForm = (newForm + 3).coerceAtMost(100)
             }
             TrainingDrill.FIELDING_AGILITY -> {
-                newFld = (newFld + attrGain).coerceAtMost(99)
+                attrs = attrs.upgrade(CareerSkillStat.FIELD_CATCHING, attrGain)
+                    .upgrade(CareerSkillStat.FIELD_THROWING, attrGain)
+                    .upgrade(CareerSkillStat.FIELD_STOPPING, attrGain)
                 baseXpGain = 28
                 newForm = (newForm + 2).coerceAtMost(100)
             }
@@ -208,7 +382,6 @@ object CareerEngine {
 
         val xpGain = (baseXpGain * diff.xpMultiplier).toInt().coerceAtLeast(10)
 
-        // Balance fatigue & injury risk on intense drills according to Difficulty
         var injuredNow = false
         if (drill != TrainingDrill.FITNESS_RECOVERY && newFatigue >= diff.injuryFatigueThreshold) {
             val baseChance = if (drill == TrainingDrill.POWER_HITTING || drill == TrainingDrill.BOWLING_SKILL) 0.30 else 0.18
@@ -222,7 +395,7 @@ object CareerEngine {
 
         val (leveledAttrs, newXp, newLevel, levelsGained) = applyXpAndLevelUps(
             role = career.role,
-            attrs = CareerPlayerAttributes(newTech, newPower, newBowl, newFld),
+            attrs = attrs,
             currentXp = career.xp + xpGain,
             currentLevel = career.level
         )
@@ -231,6 +404,7 @@ object CareerEngine {
             attributes = leveledAttrs,
             xp = newXp,
             level = newLevel,
+            skillPoints = career.skillPoints + levelsGained,
             fatigue = newFatigue,
             injuryMatchesRemaining = newInjury,
             form = newForm,
@@ -241,8 +415,8 @@ object CareerEngine {
 
         val msg = buildString {
             append("${drill.title} complete (+$xpGain XP)")
-            if (levelsGained > 0) append(" • LEVEL UP Lv.$newLevel (+attributes)!")
-            if (injuredNow) append(" • 🚑 Overworked! Minor strain (${newInjury}m — run Recovery).")
+            if (levelsGained > 0) append(" • LEVEL UP Lv.$newLevel (+$levelsGained SP)!")
+            if (injuredNow) append(" • Overworked! Minor strain (${newInjury}m — run Recovery).")
             else if (drill == TrainingDrill.FITNESS_RECOVERY) append(" • Fatigue down to $newFatigue%.")
         }
         return TrainingOutcome(updated, msg, injured = injuredNow, levelsGained = levelsGained)
@@ -250,7 +424,8 @@ object CareerEngine {
 
     fun runIplAuctionDraftEvent(
         career: CareerSaveState,
-        rng: Random = Random.Default
+        rng: Random = Random.Default,
+        league: ProT20League = ProT20League.IPL
     ): IplAuctionDraftOutcome {
         val ovr = career.overallRating
         val baseLakhs = when {
@@ -258,12 +433,12 @@ object CareerEngine {
             ovr >= 66 -> 75L
             else -> 30L
         }
-        val bidders = iplFranchises.shuffled(rng).take(3)
+        val bidders = league.franchises.shuffled(rng).take(3)
         val bidSteps = (3 + ((ovr - 55).coerceAtLeast(0) / 4) + (career.reputation / 20)).coerceIn(3, 12)
         var currentBid = baseLakhs
         var highestTeam = bidders.first()
         val highlights = mutableListOf<String>()
-        highlights.add("${career.name} enters IPL Auction (Base ${CurrencyFormatter.formatLakhs(baseLakhs)})")
+        highlights.add("${career.name} enters ${league.displayName} Draft (Base ${CurrencyFormatter.formatLakhs(baseLakhs)})")
 
         for (step in 0 until bidSteps) {
             val team = bidders[step % bidders.size]
@@ -281,33 +456,70 @@ object CareerEngine {
         }
         highlights.add("SOLD! $highestTeam signs ${career.name} for ${CurrencyFormatter.formatLakhs(currentBid)}!")
 
-        val newAwards = (career.awards + "IPL Drafted: $highestTeam (${CurrencyFormatter.formatLakhs(currentBid)})").distinct()
-        val updated = career.copy(
+        val newAwards = (career.awards + "${league.displayName} Drafted: $highestTeam (${CurrencyFormatter.formatLakhs(currentBid)})").distinct()
+        val updatedLeagues = (career.signedProLeagues + league.name).distinct()
+        val baseUpdated = career.copy(
             stage = CareerStage.IPL_FRANCHISE,
+            activeProLeague = league,
+            signedProLeagues = updatedLeagues,
             iplTeamName = highestTeam,
             iplBoughtPriceLakhs = currentBid,
             reputation = (career.reputation + 12).coerceAtMost(100),
+            selectionMeter = maxOf(career.selectionMeter, 68),
+            skillPoints = career.skillPoints + 1,
             form = (career.form + 6).coerceAtMost(100),
             awards = newAwards
+        )
+        val updated = baseUpdated.copy(
+            currentObjective = generateMatchObjective(baseUpdated, league.toMatchType())
         )
         CricketerDatabase.registerActiveCareerPlayer(updated.toCricketer())
         return IplAuctionDraftOutcome(
             updatedCareer = updated,
             winningFranchise = highestTeam,
             finalBidLakhs = currentBid,
-            biddingHighlights = highlights
+            biddingHighlights = highlights,
+            league = league
         )
+    }
+
+    fun switchProLeague(
+        career: CareerSaveState,
+        league: ProT20League,
+        rng: Random = Random.Default
+    ): CareerSaveState {
+        if (career.stage != CareerStage.IPL_FRANCHISE) return career
+        val team = league.franchises.random(rng)
+        val updatedLeagues = (career.signedProLeagues + league.name).distinct()
+        val updated = career.copy(
+            activeProLeague = league,
+            signedProLeagues = updatedLeagues,
+            iplTeamName = team,
+            currentObjective = generateMatchObjective(career.copy(activeProLeague = league), league.toMatchType())
+        )
+        CricketerDatabase.registerActiveCareerPlayer(updated.toCricketer())
+        return updated
     }
 
     fun acceptInternationalCallUp(career: CareerSaveState): CareerSaveState {
         val nation = InternationalNations.all.firstOrNull { it.code == career.countryCode }
             ?: InternationalNations.all.first()
         val awards = (career.awards + "International Debut (${nation.name})").distinct()
-        val updated = career.copy(
+        val achievements = career.unlockedAchievements.toMutableSet()
+        if (career.season <= 3 || career.age <= 21) {
+            achievements.add(CareerAchievementId.NATIONAL_HERO.name)
+        }
+        val baseUpdated = career.copy(
             stage = CareerStage.INTERNATIONAL,
             nationalTeamName = nation.name,
             reputation = (career.reputation + 10).coerceAtMost(100),
-            awards = awards
+            selectionMeter = maxOf(career.selectionMeter, 68),
+            skillPoints = career.skillPoints + 2,
+            awards = awards,
+            unlockedAchievements = achievements.toList()
+        )
+        val updated = baseUpdated.copy(
+            currentObjective = generateMatchObjective(baseUpdated, CareerMatchType.INTL_T20I)
         )
         CricketerDatabase.registerActiveCareerPlayer(updated.toCricketer())
         return updated
@@ -325,9 +537,25 @@ object CareerEngine {
         val myCricketer = career.toCricketer()
         CricketerDatabase.registerActiveCareerPlayer(myCricketer)
 
-        val userTeamName = when (matchType) {
-            CareerMatchType.DOMESTIC_T20 -> career.domesticTeamName
-            CareerMatchType.IPL_T20 -> career.iplTeamName.ifBlank { "IPL Emerging XI" }
+        val proLeagueForMatch = when (matchType) {
+            CareerMatchType.IPL_T20 -> ProT20League.IPL
+            CareerMatchType.PSL_T20 -> ProT20League.PSL
+            CareerMatchType.BBL_T20 -> ProT20League.BBL
+            CareerMatchType.HUNDRED_T20 -> ProT20League.THE_HUNDRED
+            else -> null
+        }
+
+        val userTeamName = when {
+            matchType == CareerMatchType.CLUB_T20 || matchType == CareerMatchType.CLUB_ONE_DAY || matchType == CareerMatchType.CLUB_FIRST_CLASS ->
+                career.clubTeamName
+            matchType == CareerMatchType.DOMESTIC_T20 || matchType == CareerMatchType.DOMESTIC_ONE_DAY || matchType == CareerMatchType.DOMESTIC_FIRST_CLASS ->
+                career.domesticTeamName
+            proLeagueForMatch != null ->
+                if (career.activeProLeague == proLeagueForMatch && career.iplTeamName.isNotBlank()) {
+                    career.iplTeamName
+                } else {
+                    proLeagueForMatch.franchises.first()
+                }
             else -> career.nationalTeamName
         }
 
@@ -335,8 +563,19 @@ object CareerEngine {
         val myCompanions: List<String>
         val oppPlayerIds: List<String>
 
-        when (matchType) {
-            CareerMatchType.DOMESTIC_T20 -> {
+        when {
+            matchType == CareerMatchType.CLUB_T20 || matchType == CareerMatchType.CLUB_ONE_DAY || matchType == CareerMatchType.CLUB_FIRST_CLASS -> {
+                val clubRivals = (clubSidesByCountry[career.countryCode] ?: clubSidesByCountry["IND"]!!)
+                    .filter { it != career.clubTeamName }
+                opponentName = clubRivals.random(rng)
+                val clubPool = CricketerDatabase.allPlayers
+                    .filter { it.basePriceLakhs <= 75L }
+                    .ifEmpty { CricketerDatabase.allPlayers }
+                    .shuffled(rng)
+                myCompanions = pickBalancedTenCompanions(clubPool, career.role)
+                oppPlayerIds = pickBalancedEleven(clubPool.filter { it.id !in myCompanions })
+            }
+            matchType == CareerMatchType.DOMESTIC_T20 || matchType == CareerMatchType.DOMESTIC_ONE_DAY || matchType == CareerMatchType.DOMESTIC_FIRST_CLASS -> {
                 val domesticRivals = (domesticSidesByCountry[career.countryCode] ?: domesticSidesByCountry["IND"]!!)
                     .filter { it != career.domesticTeamName }
                 opponentName = domesticRivals.random(rng)
@@ -346,12 +585,12 @@ object CareerEngine {
                 myCompanions = pickBalancedTenCompanions(emergingPool, career.role)
                 oppPlayerIds = pickBalancedEleven(emergingPool.filter { it.id !in myCompanions })
             }
-            CareerMatchType.IPL_T20 -> {
-                val rivals = iplFranchises.filter { it != career.iplTeamName }
+            proLeagueForMatch != null -> {
+                val rivals = proLeagueForMatch.franchises.filter { it != userTeamName }
                 opponentName = rivals.random(rng)
-                val iplPool = CricketerDatabase.allPlayers.shuffled(rng)
-                myCompanions = pickBalancedTenCompanions(iplPool, career.role)
-                oppPlayerIds = pickBalancedEleven(iplPool.filter { it.id !in myCompanions })
+                val proPool = CricketerDatabase.allPlayers.shuffled(rng)
+                myCompanions = pickBalancedTenCompanions(proPool, career.role)
+                oppPlayerIds = pickBalancedEleven(proPool.filter { it.id !in myCompanions })
             }
             else -> {
                 val myNation = InternationalNations.all.firstOrNull { it.code == career.countryCode }
@@ -365,7 +604,7 @@ object CareerEngine {
         }
 
         val myLineupIds = placeCareerPlayerInOrder(myCricketer, myCompanions)
-        val captainId = if (career.stage == CareerStage.INTERNATIONAL && career.isInternationalCaptain) {
+        val captainId = if (career.isInternationalCaptain) {
             career.id
         } else {
             SquadRuleValidator.autoPickCaptain(myLineupIds)
@@ -402,7 +641,8 @@ object CareerEngine {
 
     /**
      * Reads the custom Career player's exact scorecard stats from a completed LiveMatchState
-     * and applies XP, rating boosts, milestones, fatigue, season aging, captaincy, and unlock checks.
+     * and applies Match Objectives, Selection Meter, Skill Points, Achievements, XP, fatigue,
+     * captaincy, season aging, and promotion unlock checks.
      */
     fun resolveCompletedMatch(
         career: CareerSaveState,
@@ -420,6 +660,7 @@ object CareerEngine {
         val balls = userBattingCard?.balls ?: 0
         val wickets = userBowlingCard?.wickets ?: 0
         val runsConceded = userBowlingCard?.runsConceded ?: 0
+        val legalBallsBowled = userBowlingCard?.legalBalls ?: 0
         val isPotm = match.playerOfTheMatch.startsWith(career.name, ignoreCase = true)
 
         val hitFifty = runs in 50..99
@@ -427,10 +668,31 @@ object CareerEngine {
         val tookThreeFor = wickets in 3..4
         val tookFiveFor = wickets >= 5
 
+        // Evaluate Match Objective & Team Selection Meter
+        val activeObj = career.currentObjective ?: generateMatchObjective(career, matchType)
+        val objPassed = evaluateObjective(activeObj, runs, wickets, runsConceded, legalBallsBowled)
+        val poorPerformance = !objPassed && runs < 12 && wickets == 0
+
+        val selectionDelta = when {
+            objPassed && (hitFifty || hitCentury || tookThreeFor || tookFiveFor || isPotm) -> activeObj.rewardSelectionBonus + 5
+            objPassed -> activeObj.rewardSelectionBonus
+            poorPerformance -> if (career.difficulty == CareerDifficulty.HARD || career.difficulty == CareerDifficulty.LEGEND) -16 else -12
+            else -> -6
+        }
+        val newSelectionMeter = (career.selectionMeter + selectionDelta).coerceIn(0, 100)
+        val newPoorStreak = if (poorPerformance) career.consecutivePoorMatches + 1 else 0
+        var newDroppedMatches = career.droppedMatchesRemaining
+        var droppedJustNow = false
+        if (newSelectionMeter <= 22 || newPoorStreak >= 3) {
+            newDroppedMatches = 1
+            droppedJustNow = true
+        }
+
         // XP + Performance Rating Boosts scaled by CareerDifficulty
         val diff = career.difficulty
         var rawXp = 35
         if (userWon) rawXp += 20
+        if (objPassed) rawXp += 30
         rawXp += (runs * 1.4).toInt()
         rawXp += wickets * 28
         if (hitFifty) rawXp += 35
@@ -440,37 +702,39 @@ object CareerEngine {
         if (isPotm) rawXp += 55
         val xpEarned = (rawXp * diff.xpMultiplier).toInt().coerceAtLeast(18)
 
-        var tech = career.attributes.battingTechnique
-        var power = career.attributes.powerHitting
-        var bowl = career.attributes.bowlingSkill
-        var fld = career.attributes.fielding
-        if (runs >= 50) tech = (tech + 1).coerceAtMost(99)
-        if (runs >= 100 || (userBattingCard?.sixes ?: 0) >= 3) power = (power + 1).coerceAtMost(99)
-        if (wickets >= 3) bowl = (bowl + 1).coerceAtMost(99)
-        if (wickets >= 5) bowl = (bowl + 1).coerceAtMost(99)
-        if (isPotm) fld = (fld + 1).coerceAtMost(99)
+        var attrs = career.attributes
+        if (runs >= 50) attrs = attrs.upgrade(CareerSkillStat.BAT_TIMING, 1)
+        if (runs >= 100 || (userBattingCard?.sixes ?: 0) >= 3) attrs = attrs.upgrade(CareerSkillStat.BAT_POWER, 1)
+        if (wickets >= 3) attrs = attrs.upgrade(CareerSkillStat.BOWL_WICKET_TAKING, 1)
+        if (wickets >= 5) attrs = attrs.upgrade(CareerSkillStat.BOWL_ACCURACY, 1)
+        if (isPotm) attrs = attrs.upgrade(CareerSkillStat.FIELD_CATCHING, 1)
 
         val (leveledAttrs, newXp, newLevel, levelsGained) = applyXpAndLevelUps(
             role = career.role,
-            attrs = CareerPlayerAttributes(tech, power, bowl, fld),
+            attrs = attrs,
             currentXp = career.xp + xpEarned,
             currentLevel = career.level
         )
 
-        val repGain = buildRepGain(userWon, runs, wickets, isPotm, matchType)
+        // Skill progression points earned
+        var earnedSkillPoints = 1 + levelsGained
+        if (objPassed) earnedSkillPoints += activeObj.rewardSkillPoints
+        if (hitFifty || hitCentury || tookThreeFor || tookFiveFor || isPotm) earnedSkillPoints += 1
+
+        val repGain = buildRepGain(userWon, runs, wickets, isPotm, matchType, objPassed)
         val newRep = (career.reputation + repGain).coerceIn(0, 100)
         val formDelta = when {
             hitCentury || tookFiveFor || isPotm -> 10
-            hitFifty || tookThreeFor -> 6
+            hitFifty || tookThreeFor || objPassed -> 6
             runs >= 25 || wickets >= 1 || userWon -> 2
             else -> if (diff == CareerDifficulty.HARD || diff == CareerDifficulty.LEGEND) -6 else -4
         }
         val newForm = (career.form + formDelta).coerceIn(30, 100)
 
         val baseFatigueIncrease = when (matchType.format) {
-            com.example.data.model.MatchFormat.T20I -> 15
-            com.example.data.model.MatchFormat.ODI -> 20
-            com.example.data.model.MatchFormat.TEST -> 26
+            MatchFormat.T20I -> 15
+            MatchFormat.ODI -> 20
+            MatchFormat.TEST -> 26
         }
         val fatigueIncrease = (baseFatigueIncrease * diff.fatigueMultiplier).toInt().coerceAtLeast(10)
         val newFatigue = (career.fatigue + fatigueIncrease).coerceIn(0, 100)
@@ -498,53 +762,82 @@ object CareerEngine {
         val awards = career.awards.toMutableList()
         val milestoneParts = mutableListOf<String>()
 
+        if (objPassed) {
+            milestoneParts.add("Objective Met (+${activeObj.rewardSkillPoints} SP)")
+        }
         if (hitCentury) {
-            milestoneParts.add("💯 Century ($runs)")
+            milestoneParts.add("Century ($runs)")
             if ("Maiden Century" !in awards) awards.add("Maiden Century")
         } else if (hitFifty) {
-            milestoneParts.add("⭐ Half-Century ($runs)")
+            milestoneParts.add("Half-Century ($runs)")
         }
         if (tookFiveFor) {
-            milestoneParts.add("🔥 5-Wicket Haul ($wickets/$runsConceded)")
+            milestoneParts.add("5-Wicket Haul ($wickets/$runsConceded)")
             if ("5-Wicket Haul" !in awards) awards.add("5-Wicket Haul")
         } else if (tookThreeFor) {
-            milestoneParts.add("🎯 $wickets Wickets")
+            milestoneParts.add("$wickets Wickets")
         }
         if (isPotm) {
-            milestoneParts.add("🏆 Player of the Match")
+            milestoneParts.add("Player of the Match")
         }
-        if (userWon && matchType == CareerMatchType.WORLD_CUP) {
+        if (userWon && matchType.isWorldChampionship) {
             wcTrophies += 1
-            milestoneParts.add("🏆 WORLD CUP CHAMPION!")
-            if ("World Cup Champion" !in awards) awards.add("World Cup Champion")
+            val wcLabel = if (matchType == CareerMatchType.ODI_WORLD_CUP) "50-Over World Champion" else "T20 World Champion"
+            milestoneParts.add("$wcLabel!")
+            if (wcLabel !in awards) awards.add(wcLabel)
         } else if (seasonCompleted && userWon) {
             when (career.stage) {
+                CareerStage.CLUB_CRICKET -> {
+                    domTrophies += 1
+                    milestoneParts.add("Club Shield Champion!")
+                    if ("Club Champion" !in awards) awards.add("Club Champion")
+                }
                 CareerStage.DOMESTIC -> {
                     domTrophies += 1
-                    milestoneParts.add("🏆 Domestic Trophy Won!")
+                    milestoneParts.add("Domestic Trophy Won!")
                     if ("Domestic Champion" !in awards) awards.add("Domestic Champion")
                 }
                 CareerStage.IPL_FRANCHISE -> {
                     iplTrophies += 1
-                    milestoneParts.add("🏆 IPL Champion!")
-                    if ("IPL Champion" !in awards) awards.add("IPL Champion")
+                    milestoneParts.add("${career.activeProLeague.displayName} Champion!")
+                    if ("${career.activeProLeague.displayName} Champion" !in awards) {
+                        awards.add("${career.activeProLeague.displayName} Champion")
+                    }
                 }
                 CareerStage.INTERNATIONAL -> {
                     seriesWins += 1
-                    milestoneParts.add("🏆 International Series Win!")
+                    milestoneParts.add("International Series Win!")
                 }
                 else -> {}
             }
         }
 
-        // National Captaincy check in Stage 3
+        // Team Captaincy check in International stage
         var becameCaptain = career.isInternationalCaptain
         var newlyUnlocked: String? = null
-        if (career.stage == CareerStage.INTERNATIONAL && !becameCaptain && newRep >= 78 && leveledAttrs.overallFor(career.role) >= 76) {
+        if (career.stage == CareerStage.INTERNATIONAL && !becameCaptain && newRep >= 76 && leveledAttrs.overallFor(career.role) >= 75) {
             becameCaptain = true
-            newlyUnlocked = "👑 Appointed Captain (C) of ${career.nationalTeamName}!"
-            awards.add("National Captain (C)")
+            newlyUnlocked = "Appointed Team Captain (C) of ${career.nationalTeamName}!"
+            if ("National Captain (C)" !in awards) awards.add("National Captain (C)")
         }
+
+        // Achievements Evaluation (all 6 Career Achievements)
+        val existingAchievements = career.unlockedAchievements.toMutableSet()
+        val newlyEarnedAchievements = mutableListOf<CareerAchievementId>()
+        fun grant(id: CareerAchievementId) {
+            if (existingAchievements.add(id.name)) {
+                newlyEarnedAchievements.add(id)
+                if (id.title !in awards) awards.add("Badge: ${id.title}")
+            }
+        }
+        grant(CareerAchievementId.FIRST_STEPS)
+        if (runs >= 50 || wickets >= 3) grant(CareerAchievementId.RISING_STAR)
+        if (becameCaptain) grant(CareerAchievementId.CAPTAINCY_CALL)
+        if (career.stage == CareerStage.INTERNATIONAL && (career.season <= 3 || career.age <= 21)) {
+            grant(CareerAchievementId.NATIONAL_HERO)
+        }
+        if (wcTrophies >= 1) grant(CareerAchievementId.WORLD_CHAMPION)
+        if (runs >= 75 && wickets >= 3) grant(CareerAchievementId.ALL_ROUNDER)
 
         val bestWkts: Int
         val bestRuns: Int
@@ -567,17 +860,24 @@ object CareerEngine {
             teamWon = userWon,
             potm = isPotm,
             milestoneNote = milestoneParts.joinToString(" • "),
-            xpEarned = xpEarned
+            xpEarned = xpEarned,
+            objectivePassed = objPassed
         )
 
         val newPeak = maxOf(career.peakOverall, leveledAttrs.overallFor(career.role))
-        val updated = career.copy(
+        val preObjectiveUpdated = career.copy(
             age = newAge,
             season = newSeason,
             attributes = leveledAttrs,
             xp = newXp,
             level = newLevel,
+            skillPoints = career.skillPoints + earnedSkillPoints,
             reputation = newRep,
+            selectionMeter = newSelectionMeter,
+            droppedMatchesRemaining = newDroppedMatches,
+            consecutivePoorMatches = newPoorStreak,
+            objectivesCompleted = career.objectivesCompleted + if (objPassed) 1 else 0,
+            unlockedAchievements = existingAchievements.toList(),
             form = newForm,
             fatigue = newFatigue,
             injuryMatchesRemaining = newInjury,
@@ -601,13 +901,23 @@ object CareerEngine {
             awards = awards.distinct(),
             recentLogs = (career.recentLogs + log).takeLast(15)
         )
+        val updated = preObjectiveUpdated.copy(
+            currentObjective = generateMatchObjective(preObjectiveUpdated, matchType)
+        )
         CricketerDatabase.registerActiveCareerPlayer(updated.toCricketer())
 
         if (newlyUnlocked == null) {
-            if (updated.canEnterIplAuction && !career.canEnterIplAuction) {
-                newlyUnlocked = "🔨 IPL Auction Entry Unlocked! Enter the auction pool now."
-            } else if (updated.canEarnInternationalCallUp && !career.canEarnInternationalCallUp) {
-                newlyUnlocked = "🌍 International Call-Up Earned! Join ${updated.nationalTeamName}."
+            newlyUnlocked = when {
+                droppedJustNow -> "Dropped from the XI! Complete a Selection Net Trial to regain your place."
+                updated.canPromoteToDomestic && !career.canPromoteToDomestic ->
+                    "Domestic Call-Up Unlocked! Graduate from Club Cricket to Domestic First-Class & Limited-Overs."
+                updated.canEnterIplAuction && !career.canEnterIplAuction ->
+                    "Pro T20 Draft Unlocked! Enter the IPL, PSL, BBL & The Hundred Auction Pool."
+                updated.canEarnInternationalCallUp && !career.canEarnInternationalCallUp ->
+                    "International Call-Up Earned! Debut for ${updated.nationalTeamName}."
+                newlyEarnedAchievements.isNotEmpty() ->
+                    "Achievement Unlocked: ${newlyEarnedAchievements.joinToString(", ") { it.title }}!"
+                else -> null
             }
         }
 
@@ -616,9 +926,10 @@ object CareerEngine {
             append("${if (userWon) "WIN" else "LOSS"} vs ${match.teamB.teamName}: ")
             append("$runs($balls)")
             if (wickets > 0) append(" & $wickets/$runsConceded")
-            append(" • +$xpEarned XP")
+            append(" • +$xpEarned XP • +$earnedSkillPoints SP")
+            if (objPassed) append(" • Obj OK")
             if (levelsGained > 0) append(" • Lv.$newLevel!")
-            if (injuredInMatch) append(" • 🚑 Strain!")
+            if (injuredInMatch) append(" • Strain!")
         }
 
         return CareerMatchResolution(
@@ -626,6 +937,8 @@ object CareerEngine {
             summaryMessage = summary,
             milestoneBanner = milestoneParts.takeIf { it.isNotEmpty() }?.joinToString(" • "),
             newlyUnlockedStage = newlyUnlocked,
+            newlyUnlockedAchievements = newlyEarnedAchievements,
+            objectivePassed = objPassed,
             retirementPromptTriggered = retirementTriggered
         )
     }
@@ -664,7 +977,9 @@ object CareerEngine {
             iplTeamName = career.iplTeamName,
             awards = finalAwards,
             difficulty = career.difficulty,
-            includeInAuctions = true
+            includeInAuctions = true,
+            appearance = career.appearance,
+            achievementsCount = career.unlockedAchievements.size
         )
         val retiredCareer = career.copy(stage = CareerStage.RETIRED)
         return retiredCareer to legend
@@ -686,41 +1001,38 @@ object CareerEngine {
         var xp = currentXp
         var level = currentLevel
         var gained = 0
-        var tech = attrs.battingTechnique
-        var power = attrs.powerHitting
-        var bowl = attrs.bowlingSkill
-        var fld = attrs.fielding
+        var updatedAttrs = attrs
 
         while (xp >= 100 + (level - 1) * 35 && level < 50) {
             xp -= 100 + (level - 1) * 35
             level++
             gained++
-            when (role) {
-                PlayerRole.BATTER -> {
-                    tech = (tech + 2).coerceAtMost(99)
-                    power = (power + 2).coerceAtMost(99)
-                    fld = (fld + 1).coerceAtMost(99)
-                }
-                PlayerRole.WICKETKEEPER -> {
-                    tech = (tech + 2).coerceAtMost(99)
-                    power = (power + 1).coerceAtMost(99)
-                    fld = (fld + 2).coerceAtMost(99)
-                }
-                PlayerRole.ALL_ROUNDER -> {
-                    tech = (tech + 1).coerceAtMost(99)
-                    power = (power + 2).coerceAtMost(99)
-                    bowl = (bowl + 2).coerceAtMost(99)
-                    fld = (fld + 1).coerceAtMost(99)
-                }
-                PlayerRole.SEAMER, PlayerRole.SPINNER -> {
-                    bowl = (bowl + 2).coerceAtMost(99)
-                    fld = (fld + 1).coerceAtMost(99)
-                    tech = (tech + 1).coerceAtMost(99)
-                }
+            updatedAttrs = when (role) {
+                PlayerRole.BATTER -> updatedAttrs
+                    .upgrade(CareerSkillStat.BAT_TIMING, 2)
+                    .upgrade(CareerSkillStat.BAT_POWER, 2)
+                    .upgrade(CareerSkillStat.BAT_CONSISTENCY, 1)
+                    .upgrade(CareerSkillStat.FIELD_CATCHING, 1)
+                PlayerRole.WICKETKEEPER -> updatedAttrs
+                    .upgrade(CareerSkillStat.BAT_TIMING, 2)
+                    .upgrade(CareerSkillStat.BAT_CONSISTENCY, 1)
+                    .upgrade(CareerSkillStat.FIELD_CATCHING, 2)
+                    .upgrade(CareerSkillStat.FIELD_STOPPING, 1)
+                PlayerRole.ALL_ROUNDER -> updatedAttrs
+                    .upgrade(CareerSkillStat.BAT_POWER, 2)
+                    .upgrade(CareerSkillStat.BAT_TIMING, 1)
+                    .upgrade(CareerSkillStat.BOWL_PACE_SPIN, 2)
+                    .upgrade(CareerSkillStat.BOWL_ACCURACY, 1)
+                    .upgrade(CareerSkillStat.FIELD_THROWING, 1)
+                PlayerRole.SEAMER, PlayerRole.SPINNER -> updatedAttrs
+                    .upgrade(CareerSkillStat.BOWL_PACE_SPIN, 2)
+                    .upgrade(CareerSkillStat.BOWL_ACCURACY, 2)
+                    .upgrade(CareerSkillStat.BOWL_WICKET_TAKING, 1)
+                    .upgrade(CareerSkillStat.FIELD_STOPPING, 1)
             }
         }
         return LevelUpResult(
-            attributes = CareerPlayerAttributes(tech, power, bowl, fld),
+            attributes = updatedAttrs,
             remainingXp = xp,
             level = level,
             levelsGained = gained
@@ -732,16 +1044,18 @@ object CareerEngine {
         runs: Int,
         wickets: Int,
         potm: Boolean,
-        matchType: CareerMatchType
+        matchType: CareerMatchType,
+        objectivePassed: Boolean
     ): Int {
         var gain = if (won) 4 else 1
+        if (objectivePassed) gain += 3
         if (runs >= 30) gain += 2
         if (runs >= 50) gain += 3
         if (runs >= 100) gain += 6
         if (wickets >= 2) gain += 3
         if (wickets >= 4) gain += 5
         if (potm) gain += 5
-        if (matchType == CareerMatchType.WORLD_CUP && won) gain += 8
+        if (matchType.isWorldChampionship && won) gain += 8
         return gain
     }
 
@@ -776,10 +1090,10 @@ object CareerEngine {
             companionIds.mapNotNull { CricketerDatabase.getById(it) }
         ).map { it.id }.toMutableList()
         val targetSlot = when (myCricketer.role) {
-            PlayerRole.BATTER -> 2 // #3 star slot so the user bats almost every single match!
-            PlayerRole.WICKETKEEPER -> 3 // #4
-            PlayerRole.ALL_ROUNDER -> 4 // #5
-            PlayerRole.SEAMER, PlayerRole.SPINNER -> 7 // #8 bowling specialist
+            PlayerRole.BATTER -> 2
+            PlayerRole.WICKETKEEPER -> 3
+            PlayerRole.ALL_ROUNDER -> 4
+            PlayerRole.SEAMER, PlayerRole.SPINNER -> 7
         }.coerceIn(0, orderedCompanions.size)
         orderedCompanions.add(targetSlot, myCricketer.id)
         return orderedCompanions.take(11)

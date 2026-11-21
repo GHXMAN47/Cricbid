@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Gavel
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -39,6 +41,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -57,12 +60,15 @@ import com.example.data.model.BattingStyle
 import com.example.data.model.BowlingStyle
 import com.example.data.model.CareerDifficulty
 import com.example.data.model.CareerMatchType
+import com.example.data.model.CareerPlayerAppearance
 import com.example.data.model.CareerSaveState
+import com.example.data.model.CareerSkillStat
 import com.example.data.model.CareerStage
 import com.example.data.model.CurrencyFormatter
 import com.example.data.model.PlayerRole
+import com.example.data.model.ProT20League
 import com.example.data.model.TrainingDrill
-import com.example.ui.components.IndianPlayerAvatar
+import com.example.ui.components.CareerPlayerPortrait
 import com.example.ui.components.RolePillBadge
 import com.example.ui.theme.AuctionGold
 import com.example.ui.theme.BoundarySky
@@ -85,12 +91,17 @@ import com.example.viewmodel.CareerUiState
 fun CareerScreen(
     uiState: CareerUiState,
     onBack: () -> Unit,
-    onCreateCareer: (String, Int, String, String, String, PlayerRole, BattingStyle, BowlingStyle, CareerDifficulty) -> Unit,
+    onCreateCareer: (String, Int, String, String, String, PlayerRole, BattingStyle, BowlingStyle, CareerDifficulty, CareerPlayerAppearance) -> Unit,
     onChangeDifficulty: (CareerDifficulty) -> Unit,
     onRunDrill: (TrainingDrill) -> Unit,
-    onEnterIplAuction: () -> Unit,
+    onPromoteToDomestic: () -> Unit,
+    onEnterIplAuction: (ProT20League) -> Unit,
+    onSelectProLeague: (ProT20League) -> Unit,
     onDismissAuctionDraft: () -> Unit,
     onAcceptIntlCallUp: () -> Unit,
+    onSpendSkillPoint: (CareerSkillStat) -> Unit,
+    onRunSelectionTrial: () -> Unit,
+    onRefreshObjective: (CareerMatchType) -> Unit,
     onPlayLiveMatch: (CareerMatchType) -> Unit,
     onQuickSimMatch: (CareerMatchType) -> Unit,
     onRetireToHallOfFame: () -> Unit,
@@ -100,8 +111,25 @@ fun CareerScreen(
 ) {
     BackHandler(onBack = onBack)
 
-    var topTab by rememberSaveable { mutableIntStateOf(0) } // 0 = Active Career / Create, 1 = Hall of Fame
-    var selectedIntlMatchType by rememberSaveable { mutableStateOf(CareerMatchType.INTL_T20I) }
+    var topTab by rememberSaveable { mutableIntStateOf(0) } // 0 = Career Hub, 1 = Skills & Badges, 2 = Hall of Fame
+    var selectedDraftLeague by rememberSaveable { mutableStateOf(ProT20League.IPL) }
+
+    val activeCareer = uiState.activeCareer
+    val availableFormats = activeCareer?.availableMatchTypesForCurrentStage() ?: listOf(CareerMatchType.CLUB_T20)
+    var selectedMatchType by rememberSaveable { mutableStateOf(availableFormats.first()) }
+
+    LaunchedEffect(activeCareer?.stage, activeCareer?.activeProLeague) {
+        if (activeCareer != null) {
+            val valid = activeCareer.availableMatchTypesForCurrentStage()
+            if (selectedMatchType !in valid) {
+                selectedMatchType = if (activeCareer.stage == CareerStage.IPL_FRANCHISE) {
+                    activeCareer.activeProLeague.toMatchType()
+                } else {
+                    valid.first()
+                }
+            }
+        }
+    }
 
     Box(
         modifier = modifier
@@ -131,7 +159,7 @@ fun CareerScreen(
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "ROAD TO LEGEND",
+                        text = "PLAYER CAREER MODE",
                         style = MaterialTheme.typography.headlineMedium.copy(
                             fontFamily = DisplayFontFamily,
                             letterSpacing = 1.sp,
@@ -139,12 +167,14 @@ fun CareerScreen(
                         )
                     )
                     Text(
-                        text = uiState.activeCareer?.stage?.label ?: "Single-Player Career Mode",
+                        text = activeCareer?.stage?.label ?: "Club → Domestic → T20 Leagues → Intl → Captain",
                         style = MaterialTheme.typography.labelSmall,
-                        color = AuctionGold
+                        color = AuctionGold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
-                uiState.activeCareer?.let { active ->
+                activeCareer?.let { active ->
                     val diffColor = careerDifficultyAccent(active.difficulty)
                     Surface(
                         color = diffColor.copy(alpha = 0.16f),
@@ -165,7 +195,7 @@ fun CareerScreen(
                 }
             }
 
-            // Tab Switcher: Career vs Hall of Fame
+            // Tab Switcher: Career Hub | Skills & Badges | Hall of Fame
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -176,22 +206,31 @@ fun CareerScreen(
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 CareerTopTab(
-                    label = if (uiState.activeCareer != null) "My Career" else "New Rookie",
+                    label = if (activeCareer != null) "Career Hub" else "Create Player",
                     selected = topTab == 0,
                     onClick = { topTab = 0 },
                     modifier = Modifier.weight(1f).testTag("career_tab_main")
                 )
+                if (activeCareer != null) {
+                    val spSuffix = if (activeCareer.skillPoints > 0) " (${activeCareer.skillPoints} SP)" else ""
+                    CareerTopTab(
+                        label = "Skills$spSuffix",
+                        selected = topTab == 1,
+                        onClick = { topTab = 1 },
+                        modifier = Modifier.weight(1f).testTag("career_tab_skills")
+                    )
+                }
                 CareerTopTab(
-                    label = "Hall of Fame (${uiState.hallOfFame.size})",
-                    selected = topTab == 1,
-                    onClick = { topTab = 1 },
-                    modifier = Modifier.weight(1f).testTag("career_tab_hof")
+                    label = "HOF (${uiState.hallOfFame.size})",
+                    selected = topTab == 2,
+                    onClick = { topTab = 2 },
+                    modifier = Modifier.weight(0.9f).testTag("career_tab_hof")
                 )
             }
 
             // Main View Routing
             when {
-                topTab == 1 -> {
+                topTab == 2 -> {
                     HallOfFameListContent(
                         legends = uiState.hallOfFame,
                         onToggleAuctionPool = onToggleLegendInAuctions,
@@ -203,28 +242,56 @@ fun CareerScreen(
                         legend = uiState.latestRetiredLegend,
                         onContinueToHallOfFame = {
                             onDismissRetirement()
-                            topTab = 1
+                            topTab = 2
                         },
                         modifier = Modifier.weight(1f)
                     )
                 }
-                uiState.activeCareer == null -> {
+                activeCareer == null -> {
                     RookieCreatorContent(
                         onCreateCareer = onCreateCareer,
                         modifier = Modifier.weight(1f)
                     )
                 }
+                topTab == 1 -> {
+                    CareerSkillsAndBadgesContent(
+                        career = activeCareer,
+                        onSpendSkillPoint = onSpendSkillPoint,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
                 else -> {
                     CareerDashboardContent(
-                        career = uiState.activeCareer,
+                        career = activeCareer,
                         uiState = uiState,
-                        selectedIntlMatchType = selectedIntlMatchType,
-                        onSelectIntlMatchType = { selectedIntlMatchType = it },
+                        selectedMatchType = selectedMatchType,
+                        selectedDraftLeague = selectedDraftLeague,
+                        onSelectDraftLeague = { selectedDraftLeague = it },
+                        onSelectMatchType = { mt ->
+                            selectedMatchType = mt
+                            if (activeCareer.stage == CareerStage.IPL_FRANCHISE) {
+                                val league = when (mt) {
+                                    CareerMatchType.IPL_T20 -> ProT20League.IPL
+                                    CareerMatchType.PSL_T20 -> ProT20League.PSL
+                                    CareerMatchType.BBL_T20 -> ProT20League.BBL
+                                    CareerMatchType.HUNDRED_T20 -> ProT20League.THE_HUNDRED
+                                    else -> null
+                                }
+                                if (league != null && league != activeCareer.activeProLeague) {
+                                    onSelectProLeague(league)
+                                    return@CareerDashboardContent
+                                }
+                            }
+                            onRefreshObjective(mt)
+                        },
+                        onOpenSkillsTab = { topTab = 1 },
                         onChangeDifficulty = onChangeDifficulty,
                         onRunDrill = onRunDrill,
-                        onEnterIplAuction = onEnterIplAuction,
+                        onPromoteToDomestic = onPromoteToDomestic,
+                        onEnterIplAuction = { onEnterIplAuction(selectedDraftLeague) },
                         onDismissAuctionDraft = onDismissAuctionDraft,
                         onAcceptIntlCallUp = onAcceptIntlCallUp,
+                        onRunSelectionTrial = onRunSelectionTrial,
                         onPlayLiveMatch = onPlayLiveMatch,
                         onQuickSimMatch = onQuickSimMatch,
                         onRetireToHallOfFame = onRetireToHallOfFame,
@@ -240,31 +307,32 @@ fun CareerScreen(
 private fun CareerDashboardContent(
     career: CareerSaveState,
     uiState: CareerUiState,
-    selectedIntlMatchType: CareerMatchType,
-    onSelectIntlMatchType: (CareerMatchType) -> Unit,
+    selectedMatchType: CareerMatchType,
+    selectedDraftLeague: ProT20League,
+    onSelectDraftLeague: (ProT20League) -> Unit,
+    onSelectMatchType: (CareerMatchType) -> Unit,
+    onOpenSkillsTab: () -> Unit,
     onChangeDifficulty: (CareerDifficulty) -> Unit,
     onRunDrill: (TrainingDrill) -> Unit,
+    onPromoteToDomestic: () -> Unit,
     onEnterIplAuction: () -> Unit,
     onDismissAuctionDraft: () -> Unit,
     onAcceptIntlCallUp: () -> Unit,
+    onRunSelectionTrial: () -> Unit,
     onPlayLiveMatch: (CareerMatchType) -> Unit,
     onQuickSimMatch: (CareerMatchType) -> Unit,
     onRetireToHallOfFame: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val activeMatchType = when (career.stage) {
-        CareerStage.DOMESTIC, CareerStage.IPL_AUCTION -> CareerMatchType.DOMESTIC_T20
-        CareerStage.IPL_FRANCHISE -> CareerMatchType.IPL_T20
-        CareerStage.INTERNATIONAL -> selectedIntlMatchType
-        CareerStage.RETIRED -> CareerMatchType.INTL_T20I
-    }
+    val stageMatchTypes = career.availableMatchTypesForCurrentStage()
+    val effectiveMatchType = if (selectedMatchType in stageMatchTypes) selectedMatchType else stageMatchTypes.first()
 
     LazyColumn(
         modifier = modifier,
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // IPL Auction Result Banner (when just drafted!)
+        // Pro T20 Draft Result Banner
         if (uiState.latestAuctionDraft != null) {
             item(key = "auction_draft_result") {
                 IplAuctionDraftSummaryCard(
@@ -274,7 +342,7 @@ private fun CareerDashboardContent(
             }
         }
 
-        // Hero Player Profile Card
+        // Hero Player Profile Card with Custom Portrait
         item(key = "career_hero") {
             Surface(
                 color = NavySurface,
@@ -284,7 +352,12 @@ private fun CareerDashboardContent(
             ) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        IndianPlayerAvatar(avatarId = career.avatarId, size = 56.dp, selected = true, showJerseyPill = false)
+                        CareerPlayerPortrait(
+                            appearance = career.appearance,
+                            size = 64.dp,
+                            showJerseyNumber = true,
+                            isCaptain = career.isInternationalCaptain
+                        )
                         Spacer(Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -307,17 +380,26 @@ private fun CareerDashboardContent(
                                 RolePillBadge(role = career.role)
                             }
                             Text(
-                                text = "Age ${career.age} • Season ${career.season} • ${career.activeClubOrTeam}",
+                                text = "Age ${career.age} • S${career.season} • ${career.activeClubOrTeam}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = TurfEmerald,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
+                            Text(
+                                text = "${career.battingStyle.label} • ${career.bowlingStyle.label}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = BroadcastSilver,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                             if (career.iplBoughtPriceLakhs > 0L) {
                                 Text(
-                                    text = "IPL Contract: ${career.iplTeamName} (${CurrencyFormatter.formatLakhs(career.iplBoughtPriceLakhs)})",
+                                    text = "${career.activeProLeague.displayName}: ${career.iplTeamName} (${CurrencyFormatter.formatLakhs(career.iplBoughtPriceLakhs)})",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = AuctionGold
+                                    color = AuctionGold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
@@ -344,7 +426,7 @@ private fun CareerDashboardContent(
                     val xpProgress = (career.xp.toFloat() / career.xpForNextLevel.coerceAtLeast(1)).coerceIn(0f, 1f)
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Level ${career.level} • XP ${career.xp}/${career.xpForNextLevel}", style = MaterialTheme.typography.labelSmall, color = BoundarySky)
+                            Text("Lv.${career.level} • XP ${career.xp}/${career.xpForNextLevel}", style = MaterialTheme.typography.labelSmall, color = BoundarySky)
                             Text(
                                 "BAT ${career.attributes.battingRating} • BWL ${career.attributes.bowlingRating} • FLD ${career.attributes.fieldingRating}",
                                 style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
@@ -359,15 +441,24 @@ private fun CareerDashboardContent(
                         )
                     }
 
-                    // Form, Reputation, Fatigue Meters
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Form, Reputation, Fatigue, Skill Points Quick Strip
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         CareerMeterPill("FORM", "${career.form}%", if (career.form >= 65) TurfEmerald else AuctionGold, Modifier.weight(1f))
                         CareerMeterPill("REP", "${career.reputation}/100", BoundarySky, Modifier.weight(1f))
                         CareerMeterPill(
                             label = if (career.isInjured) "INJURED" else "FATIGUE",
-                            value = if (career.isInjured) "${career.injuryMatchesRemaining}m Strain" else "${career.fatigue}%",
+                            value = if (career.isInjured) "${career.injuryMatchesRemaining}m" else "${career.fatigue}%",
                             accent = if (career.isInjured || career.fatigue >= 75) WicketCrimson else TurfEmerald,
                             modifier = Modifier.weight(1f)
+                        )
+                        CareerMeterPill(
+                            label = "SKILL PTS",
+                            value = "${career.skillPoints} SP",
+                            accent = if (career.skillPoints > 0) AuctionGold else BroadcastMuted,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable(onClick = onOpenSkillsTab)
                         )
                     }
                 }
@@ -393,7 +484,7 @@ private fun CareerDashboardContent(
             }
         }
 
-        // Career Progression Roadmap & Stage Promotion CTA
+        // 5-Stage Career Progression Ladder & Promotion CTAs
         item(key = "career_roadmap") {
             Surface(
                 color = NavySurface,
@@ -402,15 +493,45 @@ private fun CareerDashboardContent(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("CAREER PROGRESSION ROADMAP", style = MaterialTheme.typography.labelSmall, color = AuctionGold)
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        StageStepPill("1. Domestic", career.stage.stepNumber >= 1, career.stage.stepNumber == 1, Modifier.weight(1f))
-                        StageStepPill("2. IPL", career.stage.stepNumber >= 2, career.stage.stepNumber == 2, Modifier.weight(1f))
-                        StageStepPill("3. Intl (C)", career.stage.stepNumber >= 3, career.stage.stepNumber == 3, Modifier.weight(1f))
+                    Text("CAREER PROGRESSION LADDER", style = MaterialTheme.typography.labelSmall, color = AuctionGold)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        StageStepPill("1. Club", career.currentLadderStep >= 1, career.currentLadderStep == 1, Modifier.weight(1f))
+                        StageStepPill("2. Dom", career.currentLadderStep >= 2, career.currentLadderStep == 2, Modifier.weight(1f))
+                        StageStepPill("3. T20", career.currentLadderStep >= 3, career.currentLadderStep == 3, Modifier.weight(1f))
+                        StageStepPill("4. Intl", career.currentLadderStep >= 4, career.currentLadderStep == 4, Modifier.weight(1f))
+                        StageStepPill("5. (C)", career.currentLadderStep >= 5, career.currentLadderStep == 5, Modifier.weight(1f))
                     }
 
                     when {
+                        career.canPromoteToDomestic -> {
+                            Button(
+                                onClick = onPromoteToDomestic,
+                                colors = ButtonDefaults.buttonColors(containerColor = TurfEmerald, contentColor = OnEmeraldDark),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth().height(48.dp).testTag("promote_domestic_button")
+                            ) {
+                                Icon(Icons.Filled.TrendingUp, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Accept Domestic Call-Up (${career.domesticTeamName})!", fontWeight = FontWeight.Bold)
+                            }
+                        }
                         career.canEnterIplAuction -> {
+                            Text(
+                                text = "Choose your target Pro T20 League Draft:",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = BroadcastSilver
+                            )
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                ProT20League.entries.forEach { league ->
+                                    CareerSelectChip(
+                                        label = league.displayName,
+                                        selected = selectedDraftLeague == league,
+                                        accent = AuctionGold,
+                                        onClick = { onSelectDraftLeague(league) },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                            }
                             Button(
                                 onClick = onEnterIplAuction,
                                 colors = ButtonDefaults.buttonColors(containerColor = AuctionGold, contentColor = OnGoldDark),
@@ -419,7 +540,7 @@ private fun CareerDashboardContent(
                             ) {
                                 Icon(Icons.Filled.Gavel, contentDescription = null)
                                 Spacer(Modifier.width(8.dp))
-                                Text("Enter IPL Auction Pool Now!", fontWeight = FontWeight.Bold)
+                                Text("Enter ${selectedDraftLeague.displayName} Auction Draft!", fontWeight = FontWeight.Bold)
                             }
                         }
                         career.canEarnInternationalCallUp -> {
@@ -431,33 +552,40 @@ private fun CareerDashboardContent(
                             ) {
                                 Icon(Icons.Filled.Public, contentDescription = null)
                                 Spacer(Modifier.width(8.dp))
-                                Text("Accept ${career.nationalTeamName} Call-Up!", fontWeight = FontWeight.Bold)
+                                Text("Accept ${career.nationalTeamName} International Call-Up!", fontWeight = FontWeight.Bold)
                             }
+                        }
+                        career.stage == CareerStage.CLUB_CRICKET -> {
+                            Text(
+                                text = "Next Promotion: Reach 76% Selection (${career.selectionMeter}%), 22 Rep (${career.reputation}), or play 2 Club matches (${career.matchesPlayed}/2) for Domestic selection.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = BroadcastSilver
+                            )
                         }
                         career.stage == CareerStage.DOMESTIC -> {
                             Text(
-                                text = "Next Goal: Reach 30 Reputation (now ${career.reputation}) or play 4 Domestic matches (${career.matchesPlayed}/4) to enter the IPL Auction.",
+                                text = "Next Promotion: Reach 78% Selection (${career.selectionMeter}%), 34 Rep (${career.reputation}), or 4 matches (${career.matchesPlayed}/4) to enter IPL/PSL/BBL/The Hundred Draft.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = BroadcastSilver
                             )
                         }
                         career.stage == CareerStage.IPL_FRANCHISE -> {
                             Text(
-                                text = "Next Goal: Reach 58 Reputation (${career.reputation}/58) or 72 OVR (${career.overallRating}/72) for your International Call-Up.",
+                                text = "Next Promotion: Reach 80% Selection (${career.selectionMeter}%), 56 Rep (${career.reputation}), or 72 OVR (${career.overallRating}) for International Debut.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = BroadcastSilver
                             )
                         }
                         career.stage == CareerStage.INTERNATIONAL && !career.isInternationalCaptain -> {
                             Text(
-                                text = "Captaincy Goal: Reach 78 Reputation (${career.reputation}/78) & 76 OVR (${career.overallRating}/76) to captain ${career.nationalTeamName}!",
+                                text = "Captaincy Goal: Reach 76 Rep (${career.reputation}/76) & 75 OVR (${career.overallRating}/75) to be named Captain (C) of ${career.nationalTeamName}!",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = BroadcastSilver
                             )
                         }
                         career.isInternationalCaptain -> {
                             Text(
-                                text = "👑 Leading ${career.nationalTeamName} as Captain (C)! Chase World Cups & build your Hall of Fame legacy.",
+                                text = "Leading ${career.nationalTeamName} as Captain (C)! Win the T20 & 50-Over World Championships to cement your Hall of Fame legacy.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = AuctionGold
                             )
@@ -467,7 +595,15 @@ private fun CareerDashboardContent(
             }
         }
 
-        // Next Match Play / Quick Sim Card
+        // Match Objectives & Team Selection Meter Card
+        item(key = "career_objective_selection") {
+            CareerObjectiveAndSelectionCard(
+                career = career,
+                onRunSelectionTrial = onRunSelectionTrial
+            )
+        }
+
+        // Next Match Play / Quick Sim Card with 3 Cricket Formats / Pro Leagues Selector
         item(key = "career_match_panel") {
             Surface(
                 color = NavySurface,
@@ -477,33 +613,41 @@ private fun CareerDashboardContent(
             ) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        text = "NEXT FIXTURE • ${activeMatchType.label.uppercase()}",
+                        text = "NEXT FIXTURE • ${effectiveMatchType.label.uppercase()}",
                         style = MaterialTheme.typography.labelMedium,
                         color = TurfEmerald
                     )
-                    if (career.stage == CareerStage.INTERNATIONAL) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            listOf(
-                                CareerMatchType.INTL_T20I to "T20I",
-                                CareerMatchType.INTL_ODI to "ODI",
-                                CareerMatchType.INTL_TEST to "Test",
-                                CareerMatchType.WORLD_CUP to "World Cup"
-                            ).forEach { (mt, short) ->
-                                CareerSelectChip(
-                                    label = short,
-                                    selected = selectedIntlMatchType == mt,
-                                    accent = if (mt == CareerMatchType.WORLD_CUP) AuctionGold else BoundarySky,
-                                    onClick = { onSelectIntlMatchType(mt) },
-                                    modifier = Modifier.weight(1f)
-                                )
+                    Text(
+                        text = when (career.stage) {
+                            CareerStage.IPL_FRANCHISE -> "Select Pro T20 League (IPL • PSL • BBL • The Hundred):"
+                            else -> "Choose Cricket Format (T20 • 50-Over One-Day • Test / First-Class):"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BroadcastSilver
+                    )
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(stageMatchTypes) { mt ->
+                            val chipAccent = when {
+                                mt.isWorldChampionship -> AuctionGold
+                                mt.isProLeague -> AuctionGold
+                                mt.format == com.example.data.model.MatchFormat.TEST -> BroadcastWhite
+                                mt.format == com.example.data.model.MatchFormat.ODI -> BoundarySky
+                                else -> TurfEmerald
                             }
+                            CareerSelectChip(
+                                label = mt.shortChip,
+                                selected = effectiveMatchType == mt,
+                                accent = chipAccent,
+                                onClick = { onSelectMatchType(mt) },
+                                modifier = Modifier.testTag("career_format_${mt.name.lowercase()}")
+                            )
                         }
                     }
 
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
-                            onClick = { onPlayLiveMatch(activeMatchType) },
-                            enabled = !uiState.busy && !career.isInjured,
+                            onClick = { onPlayLiveMatch(effectiveMatchType) },
+                            enabled = !uiState.busy && !career.isInjured && !career.isDropped,
                             colors = ButtonDefaults.buttonColors(containerColor = TurfEmerald, contentColor = OnEmeraldDark),
                             shape = RoundedCornerShape(14.dp),
                             modifier = Modifier
@@ -516,8 +660,8 @@ private fun CareerDashboardContent(
                             Text("Play Live", fontWeight = FontWeight.Bold)
                         }
                         OutlinedButton(
-                            onClick = { onQuickSimMatch(activeMatchType) },
-                            enabled = !uiState.busy && !career.isInjured,
+                            onClick = { onQuickSimMatch(effectiveMatchType) },
+                            enabled = !uiState.busy && !career.isInjured && !career.isDropped,
                             border = BorderStroke(1.dp, AuctionGold.copy(alpha = 0.7f)),
                             shape = RoundedCornerShape(14.dp),
                             modifier = Modifier
@@ -554,7 +698,7 @@ private fun CareerDashboardContent(
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Icon(Icons.Filled.FitnessCenter, contentDescription = null, tint = BoundarySky, modifier = Modifier.size(18.dp))
-                            Text("TRAINING DRILLS", style = MaterialTheme.typography.titleSmall.copy(fontFamily = DisplayFontFamily), color = BroadcastWhite)
+                            Text("NETS & TRAINING DRILLS", style = MaterialTheme.typography.titleSmall.copy(fontFamily = DisplayFontFamily), color = BroadcastWhite)
                         }
                         Text(
                             text = if (career.trainingDoneBeforeMatch) "1 Drill Done • Play Match" else "1 Drill Ready",
@@ -602,9 +746,9 @@ private fun CareerDashboardContent(
                                     )
                                     Text(
                                         text = if (isRecovery) {
-                                            "${scaledFatigue} Fatigue • Heals Strain"
+                                            "$scaledFatigue Fatigue • Heals Strain"
                                         } else {
-                                            "+${career.difficulty.drillAttrGain} Skill • ${(career.difficulty.xpMultiplier * 100).toInt()}% XP (${career.difficulty.label})"
+                                            "+${career.difficulty.drillAttrGain} Sub-Skills • ${(career.difficulty.xpMultiplier * 100).toInt()}% XP"
                                         },
                                         style = MaterialTheme.typography.labelSmall,
                                         color = BroadcastSilver
@@ -622,7 +766,7 @@ private fun CareerDashboardContent(
             }
         }
 
-        // Career Settings: Switch Difficulty Anytime (Easy / Normal / Hard)
+        // Career Settings: Switch Difficulty Anytime
         item(key = "career_difficulty_settings") {
             val activeAccent = careerDifficultyAccent(career.difficulty)
             Surface(
@@ -637,11 +781,7 @@ private fun CareerDashboardContent(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "CAREER SETTINGS • DIFFICULTY",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = AuctionGold
-                        )
+                        Text("CAREER SETTINGS • DIFFICULTY", style = MaterialTheme.typography.labelSmall, color = AuctionGold)
                         Text(
                             text = career.difficulty.shortBadge,
                             style = MaterialTheme.typography.labelSmall.copy(
@@ -651,10 +791,7 @@ private fun CareerDashboardContent(
                             )
                         )
                     }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         CareerDifficulty.entries.forEach { diff ->
                             CareerSelectChip(
                                 label = diff.label,
@@ -667,16 +804,12 @@ private fun CareerDashboardContent(
                             )
                         }
                     }
-                    Text(
-                        text = career.difficulty.summary,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = BroadcastSilver
-                    )
+                    Text(career.difficulty.summary, style = MaterialTheme.typography.labelSmall, color = BroadcastSilver)
                 }
             }
         }
 
-        // Career Totals & Milestones
+        // Career Totals & Honors
         item(key = "career_stats") {
             Surface(
                 color = NavySurface,
@@ -685,7 +818,18 @@ private fun CareerDashboardContent(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("CAREER STATS & HONORS", style = MaterialTheme.typography.titleSmall.copy(fontFamily = DisplayFontFamily), color = AuctionGold)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("CAREER STATS & HONORS", style = MaterialTheme.typography.titleSmall.copy(fontFamily = DisplayFontFamily), color = AuctionGold)
+                        Text(
+                            text = "${career.unlockedAchievements.size}/6 Badges",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily, fontWeight = FontWeight.Bold),
+                            color = TurfEmerald
+                        )
+                    }
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         CareerStatCell("MAT", "${career.matchesPlayed}")
                         CareerStatCell("RUNS", "${career.totalRuns}")
@@ -778,7 +922,7 @@ private fun CareerDashboardContent(
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(46.dp)
+                            .height(48.dp)
                             .testTag("retire_career_button")
                     ) {
                         Text("Retire & Induct into Hall of Fame", color = AuctionGold, fontWeight = FontWeight.Bold)
@@ -804,11 +948,13 @@ private fun CareerTopTab(
             .clip(RoundedCornerShape(9.dp))
             .clickable(onClick = onClick)
     ) {
-        Box(contentAlignment = Alignment.Center) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 4.dp)) {
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                color = if (selected) OnGoldDark else BroadcastSilver
+                color = if (selected) OnGoldDark else BroadcastSilver,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
@@ -823,11 +969,11 @@ private fun CareerMeterPill(label: String, value: String, accent: Color, modifie
         modifier = modifier
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(label, style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp), color = BroadcastMuted)
-            Text(value, style = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFontFamily, fontWeight = FontWeight.Bold), color = accent)
+            Text(label, style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp), color = BroadcastMuted, maxLines = 1)
+            Text(value, style = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFontFamily, fontWeight = FontWeight.Bold), color = accent, maxLines = 1)
         }
     }
 }
@@ -845,8 +991,14 @@ private fun StageStepPill(label: String, unlocked: Boolean, active: Boolean, mod
         border = BorderStroke(1.dp, color.copy(alpha = 0.6f)),
         modifier = modifier
     ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(vertical = 6.dp)) {
-            Text(label, style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = color)
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(vertical = 6.dp, horizontal = 2.dp)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                color = color,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }

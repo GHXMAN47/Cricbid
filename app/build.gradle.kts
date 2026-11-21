@@ -12,12 +12,21 @@ android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
+  val resolvedVersionCode =
+    providers
+      .gradleProperty("versionCode")
+      .orElse(providers.environmentVariable("VERSION_CODE"))
+      .orElse(providers.environmentVariable("GITHUB_RUN_NUMBER"))
+      .map { it.trim().toIntOrNull() ?: 1 }
+      .getOrElse(1)
+      .coerceAtLeast(1)
+
   defaultConfig {
     applicationId = "com.aistudio.cricbid.kqxwvn"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = resolvedVersionCode
+    versionName = if (resolvedVersionCode > 1) "1.0.$resolvedVersionCode" else "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -33,7 +42,9 @@ android {
       keyPassword = System.getenv("KEY_PASSWORD")
     }
     create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
+      val fixedDebugKeystore = file("cricbid-debug.keystore")
+      storeFile =
+        if (fixedDebugKeystore.exists()) fixedDebugKeystore else file("${rootDir}/debug.keystore")
       storePassword = "android"
       keyAlias = "androiddebugkey"
       keyPassword = "android"

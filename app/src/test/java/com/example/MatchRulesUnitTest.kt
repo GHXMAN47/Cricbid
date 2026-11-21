@@ -489,7 +489,7 @@ class MatchRulesUnitTest {
                 "Rookie ${role.displayName} OVR (${rookie.overallRating}) should start in 55..62",
                 rookie.overallRating in 55..62
             )
-            assertEquals(com.example.data.model.CareerStage.DOMESTIC, rookie.stage)
+            assertEquals(com.example.data.model.CareerStage.CLUB_CRICKET, rookie.stage)
         }
 
         // 2. Training Drill upgrades attributes, adds XP & fatigue, and Recovery reduces fatigue
@@ -543,7 +543,9 @@ class MatchRulesUnitTest {
         career = matchRes.updatedCareer
         assertEquals(1, career.matchesPlayed)
 
-        // 4. Stage 2 (IPL Auction Entry) & Stage 3 (International Call-Up + Captaincy)
+        // 4. Club -> Domestic -> Stage 3 (Pro T20 Auction) & Stage 4 (International Call-Up + Captaincy)
+        career = com.example.engine.CareerEngine.promoteToDomestic(career)
+        assertEquals(com.example.data.model.CareerStage.DOMESTIC, career.stage)
         val draftOutcome = com.example.engine.CareerEngine.runIplAuctionDraftEvent(career, Random(19L))
         career = draftOutcome.updatedCareer
         assertEquals(com.example.data.model.CareerStage.IPL_FRANCHISE, career.stage)
@@ -1082,6 +1084,148 @@ class MatchRulesUnitTest {
         assertEquals("p_bowl", summary.purpleCapPlayerId)
         assertEquals(7, summary.purpleCapHolder?.wickets)
         assertNotNull("MVP holder should be computed", summary.mvpHolder)
+    }
+
+    @Test
+    fun playerCareerModeObjectivesSelectionSkillPointsAndAllSixAchievements() {
+        val customAppearance = com.example.data.model.CareerPlayerAppearance(
+            hairstyle = com.example.data.model.HairstylePreset.SPIKY_MODERN,
+            facialFeature = com.example.data.model.FacialFeaturePreset.FULL_BEARD,
+            kitTheme = com.example.data.model.KitThemePreset.CRIMSON_GOLD,
+            batStyle = com.example.data.model.BatEquipmentPreset.GOLD_PRO,
+            jerseyNumber = 77
+        )
+        var career = com.example.engine.CareerEngine.createRookie(
+            name = "Rohan Verma",
+            startingAge = 18,
+            nationality = "India",
+            countryCode = "IND",
+            avatarId = "virat",
+            role = com.example.data.model.PlayerRole.ALL_ROUNDER,
+            battingStyle = com.example.data.model.BattingStyle.LEFT_HAND_BAT,
+            bowlingStyle = com.example.data.model.BowlingStyle.RIGHT_ARM_FAST,
+            difficulty = com.example.data.model.CareerDifficulty.NORMAL,
+            appearance = customAppearance
+        )
+
+        // 1. Starts at Hometown Club with custom appearance, initial objective, and 2 Skill Points
+        assertEquals(com.example.data.model.CareerStage.CLUB_CRICKET, career.stage)
+        assertEquals(customAppearance, career.appearance)
+        assertEquals(2, career.skillPoints)
+        assertNotNull(career.currentObjective)
+
+        // 2. Supports T20, 50-Over ODI, and Test/First-Class formats in Club & Domestic
+        val clubFormats = career.availableMatchTypesForCurrentStage().map { it.format }.toSet()
+        assertTrue(MatchFormat.T20I in clubFormats)
+        assertTrue(MatchFormat.ODI in clubFormats)
+        assertTrue(MatchFormat.TEST in clubFormats)
+
+        // 3. Skill Points spend across Batting, Bowling & Fielding sub-skills
+        val beforePower = career.attributes.battingPower
+        val (afterBatSp, _) = com.example.engine.CareerEngine.spendSkillPoint(
+            career, com.example.data.model.CareerSkillStat.BAT_POWER
+        )
+        career = afterBatSp
+        assertEquals(beforePower + 2, career.attributes.battingPower)
+        assertEquals(1, career.skillPoints)
+
+        val beforeAcc = career.attributes.bowlingAccuracy
+        val (afterBowlSp, _) = com.example.engine.CareerEngine.spendSkillPoint(
+            career, com.example.data.model.CareerSkillStat.BOWL_ACCURACY
+        )
+        career = afterBowlSp
+        assertEquals(beforeAcc + 2, career.attributes.bowlingAccuracy)
+        assertEquals(0, career.skillPoints)
+
+        // 4. Ladder progression: Club -> Domestic -> Pro T20 Leagues (IPL, PSL, BBL, The Hundred) -> International
+        career = com.example.engine.CareerEngine.promoteToDomestic(career)
+        assertEquals(com.example.data.model.CareerStage.DOMESTIC, career.stage)
+        val domFormats = career.availableMatchTypesForCurrentStage().map { it.format }.toSet()
+        assertEquals(setOf(MatchFormat.T20I, MatchFormat.ODI, MatchFormat.TEST), domFormats)
+
+        val pslDraft = com.example.engine.CareerEngine.runIplAuctionDraftEvent(
+            career, Random(5L), com.example.data.model.ProT20League.PSL
+        )
+        career = pslDraft.updatedCareer
+        assertEquals(com.example.data.model.CareerStage.IPL_FRANCHISE, career.stage)
+        assertEquals(com.example.data.model.ProT20League.PSL, career.activeProLeague)
+
+        career = com.example.engine.CareerEngine.switchProLeague(career, com.example.data.model.ProT20League.THE_HUNDRED, Random(5L))
+        assertEquals(com.example.data.model.ProT20League.THE_HUNDRED, career.activeProLeague)
+        career = com.example.engine.CareerEngine.switchProLeague(career, com.example.data.model.ProT20League.BBL, Random(5L))
+        assertEquals(com.example.data.model.ProT20League.BBL, career.activeProLeague)
+
+        // Rookie International Call-Up (Season 1, Age 18) unlocks NATIONAL_HERO immediately
+        career = com.example.engine.CareerEngine.acceptInternationalCallUp(career)
+        assertEquals(com.example.data.model.CareerStage.INTERNATIONAL, career.stage)
+        assertTrue(career.hasAchievement(com.example.data.model.CareerAchievementId.NATIONAL_HERO))
+
+        // 5. Simulate a huge World Cup Final performance (82 runs + 3 wickets + high rep/OVR) to unlock all remaining achievements
+        val (myTeam, oppTeam) = com.example.engine.CareerEngine.buildCareerMatchTeams(
+            career, com.example.data.model.CareerMatchType.ODI_WORLD_CUP, Random(12L)
+        )
+        val readyForCaptain = career.copy(
+            reputation = 82,
+            attributes = career.attributes.copy(
+                battingTechnique = 82, powerHitting = 82, bowlingSkill = 82, fielding = 82,
+                battingPower = 82, battingTiming = 82, battingConsistency = 82,
+                bowlingPaceOrSpin = 82, bowlingAccuracy = 82, bowlingWicketTaking = 82,
+                fieldingCatching = 82, fieldingThrowing = 82, fieldingStopping = 82
+            )
+        )
+        val baseMatch = MatchSimulationEngine.createMatch(myTeam, oppTeam, MatchStage.FINAL, MatchFormat.ODI, Random(12L))
+        val heroBatCard = baseMatch.innings1.battingCard.map { entry ->
+            if (entry.playerId == career.id) entry.copy(runs = 82, balls = 64, fours = 8, sixes = 2, out = false) else entry
+        }
+        val heroBowlCard = baseMatch.innings2.bowlingCard.map { entry ->
+            if (entry.playerId == career.id) entry.copy(wickets = 3, runsConceded = 28, legalBalls = 36) else entry
+        }
+        val heroMatch = baseMatch.copy(
+            innings1 = baseMatch.innings1.copy(battingCard = heroBatCard, totalRuns = 290, wickets = 5),
+            innings2 = baseMatch.innings2.copy(bowlingCard = heroBowlCard, totalRuns = 240, wickets = 10),
+            finished = true,
+            winnerTeamId = "career_user_team",
+            playerOfTheMatch = career.name,
+            resultSummary = "${myTeam.teamName} won by 50 runs"
+        )
+        val res = com.example.engine.CareerEngine.resolveCompletedMatch(
+            readyForCaptain, heroMatch, com.example.data.model.CareerMatchType.ODI_WORLD_CUP, Random(12L)
+        )
+        val heroCareer = res.updatedCareer
+        assertTrue("Objective should pass on 82 runs + 3 wickets", res.objectivePassed)
+        assertTrue(heroCareer.isInternationalCaptain)
+        assertTrue(heroCareer.hasAchievement(com.example.data.model.CareerAchievementId.FIRST_STEPS))
+        assertTrue(heroCareer.hasAchievement(com.example.data.model.CareerAchievementId.RISING_STAR))
+        assertTrue(heroCareer.hasAchievement(com.example.data.model.CareerAchievementId.CAPTAINCY_CALL))
+        assertTrue(heroCareer.hasAchievement(com.example.data.model.CareerAchievementId.NATIONAL_HERO))
+        assertTrue(heroCareer.hasAchievement(com.example.data.model.CareerAchievementId.WORLD_CHAMPION))
+        assertTrue(heroCareer.hasAchievement(com.example.data.model.CareerAchievementId.ALL_ROUNDER))
+
+        // 6. Poor form lowers selection meter and can drop the player, then Selection Trial recalls them
+        val struggling = heroCareer.copy(selectionMeter = 28, consecutivePoorMatches = 2)
+        val duckMatch = heroMatch.copy(
+            innings1 = heroMatch.innings1.copy(
+                battingCard = baseMatch.innings1.battingCard.map {
+                    if (it.playerId == career.id) it.copy(runs = 2, balls = 5, out = true) else it
+                }
+            ),
+            innings2 = heroMatch.innings2.copy(
+                bowlingCard = baseMatch.innings2.bowlingCard.map {
+                    if (it.playerId == career.id) it.copy(wickets = 0, runsConceded = 62, legalBalls = 36) else it
+                }
+            ),
+            winnerTeamId = "career_opp_team",
+            playerOfTheMatch = "Rival Star"
+        )
+        val poorRes = com.example.engine.CareerEngine.resolveCompletedMatch(
+            struggling, duckMatch, com.example.data.model.CareerMatchType.INTL_ODI, Random(12L)
+        )
+        assertTrue("Poor form should drop the player from XI", poorRes.updatedCareer.isDropped)
+        assertTrue("Selection meter should fall", poorRes.updatedCareer.selectionMeter < struggling.selectionMeter)
+
+        val (recalled, _) = com.example.engine.CareerEngine.runSelectionTrial(poorRes.updatedCareer)
+        assertFalse("Selection trial should clear dropped status", recalled.isDropped)
+        assertTrue("Selection meter should recover to at least 50%", recalled.selectionMeter >= 50)
     }
 }
 

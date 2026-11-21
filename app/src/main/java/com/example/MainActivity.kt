@@ -682,15 +682,19 @@ private fun CricBidArenaFlow(
                             careerMatchRecordedKey = key
                             careerViewModel.recordLiveMatchResult(m, careerMatchType)
                             val won = m.winnerTeamId == "career_user_team"
-                            val wonTrophy = won && careerMatchType == CareerMatchType.WORLD_CUP
+                            val wonTrophy = won && careerMatchType.isWorldChampionship
                             onRecordMatchOutcome(won, wonTrophy)
-                            if (careerMatchType == CareerMatchType.WORLD_CUP && trophyCabinetStore != null) {
+                            if (careerMatchType.isWorldChampionship && trophyCabinetStore != null) {
                                 val runnerUp = if (m.winnerTeamId == m.teamA.teamId) m.teamB.teamName else m.teamA.teamName
                                 val winner = if (m.winnerTeamId == m.teamA.teamId) m.teamA.teamName else m.teamB.teamName
                                 trophyCabinetData = trophyCabinetStore.recordFinalOutcome(
                                     TrophyCabinetRecord(
                                         id = key,
-                                        title = "Career World Cup Final",
+                                        title = if (careerMatchType == CareerMatchType.ODI_WORLD_CUP) {
+                                            "Career 50-Over World Championship"
+                                        } else {
+                                            "Career T20 World Championship"
+                                        },
                                         competitionType = "CAREER",
                                         championTeamName = winner,
                                         runnerUpTeamName = runnerUp,
@@ -1120,19 +1124,24 @@ private fun CricBidArenaFlow(
                 )
             }
 
-            // 2B-2. Single-Player Career Mode (Road to Legend + Hall of Fame)
+            // 2B-2. Single-Player Career Mode (Cricket 26-style Road to Legend + Hall of Fame)
             inCareerMode -> {
                 CareerScreen(
                     uiState = careerState,
                     onBack = { inCareerMode = false },
-                    onCreateCareer = { name, age, nat, code, avId, role, batS, bowlS, diff ->
-                        careerViewModel.createRookieCareer(name, age, nat, code, avId, role, batS, bowlS, diff)
+                    onCreateCareer = { name, age, nat, code, avId, role, batS, bowlS, diff, appearance ->
+                        careerViewModel.createRookieCareer(name, age, nat, code, avId, role, batS, bowlS, diff, appearance)
                     },
                     onChangeDifficulty = { diff -> careerViewModel.updateDifficulty(diff) },
                     onRunDrill = { drill -> careerViewModel.runTrainingDrill(drill) },
-                    onEnterIplAuction = { careerViewModel.enterIplAuction() },
+                    onPromoteToDomestic = { careerViewModel.promoteToDomestic() },
+                    onEnterIplAuction = { league -> careerViewModel.enterIplAuction(league) },
+                    onSelectProLeague = { league -> careerViewModel.selectProLeague(league) },
                     onDismissAuctionDraft = { careerViewModel.dismissAuctionDraftSummary() },
                     onAcceptIntlCallUp = { careerViewModel.acceptInternationalCallUp() },
+                    onSpendSkillPoint = { stat -> careerViewModel.spendSkillPoint(stat) },
+                    onRunSelectionTrial = { careerViewModel.completeSelectionTrial() },
+                    onRefreshObjective = { mt -> careerViewModel.refreshObjectiveForMatchType(mt) },
                     onPlayLiveMatch = { matchType ->
                         val prepared = careerViewModel.prepareLiveMatch(matchType)
                         if (prepared != null) {
@@ -1227,6 +1236,7 @@ private fun CricBidArenaFlow(
                         showTrophyCabinet = true
                     },
                     resumableRoom = resumableAuctionRoom,
+                    activeCareer = careerState.activeCareer,
                     modifier = contentModifier
                 )
             }

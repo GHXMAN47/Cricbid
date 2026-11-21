@@ -37,22 +37,41 @@ jobs:
       - name: Verify Gradle version
         run: gradle --version
 
-      - name: Create temporary debug keystore
+      - name: Ensure fixed debug keystore
         run: |
-          rm -f debug.keystore
-          keytool -genkeypair \
-            -keystore debug.keystore \
-            -storepass android \
-            -alias androiddebugkey \
-            -keypass android \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US"
-          test -f debug.keystore
+          KEYSTORE_PATH="app/cricbid-debug.keystore"
+          if [ -f "$KEYSTORE_PATH" ]; then
+            echo "Reusing existing fixed debug keystore at ${KEYSTORE_PATH}"
+          else
+            echo "Generating fixed debug keystore once at ${KEYSTORE_PATH}..."
+            keytool -genkeypair \
+              -keystore "$KEYSTORE_PATH" \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=CricBid Debug,O=CricBid,C=US"
+            test -f "$KEYSTORE_PATH"
+
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add "$KEYSTORE_PATH"
+            git commit -m "chore: add fixed debug keystore for APK updates [skip ci]"
+            if [ "${GITHUB_REF_TYPE:-}" = "branch" ] && [ -n "${GITHUB_REF_NAME:-}" ]; then
+              git push origin "HEAD:${GITHUB_REF_NAME}"
+            else
+              git push
+            fi
+          fi
+          test -f "$KEYSTORE_PATH"
+          keytool -list -keystore "$KEYSTORE_PATH" -storepass android -alias androiddebugkey | grep -E "Alias name:|SHA-256|SHA256" || true
 
       - name: Build Debug APK
-        run: gradle :app:assembleDebug --stacktrace --no-daemon
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+        run: gradle :app:assembleDebug -PversionCode="${GITHUB_RUN_NUMBER}" --stacktrace --no-daemon
 
       - name: Verify Debug APK and prepare release metadata
         id: apk_meta

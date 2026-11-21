@@ -7,10 +7,13 @@ import com.example.data.model.BattingStyle
 import com.example.data.model.BowlingStyle
 import com.example.data.model.CareerDifficulty
 import com.example.data.model.CareerMatchType
+import com.example.data.model.CareerPlayerAppearance
 import com.example.data.model.CareerSaveState
+import com.example.data.model.CareerSkillStat
 import com.example.data.model.CareerStage
 import com.example.data.model.HallOfFameLegend
 import com.example.data.model.PlayerRole
+import com.example.data.model.ProT20League
 import com.example.data.model.TeamState
 import com.example.data.model.TrainingDrill
 import com.example.engine.CareerEngine
@@ -56,7 +59,8 @@ class CareerViewModel(
         role: PlayerRole,
         battingStyle: BattingStyle,
         bowlingStyle: BowlingStyle,
-        difficulty: CareerDifficulty = CareerDifficulty.NORMAL
+        difficulty: CareerDifficulty = CareerDifficulty.NORMAL,
+        appearance: CareerPlayerAppearance = CareerPlayerAppearance()
     ) {
         val rookie = CareerEngine.createRookie(
             name = name,
@@ -67,7 +71,8 @@ class CareerViewModel(
             role = role,
             battingStyle = battingStyle,
             bowlingStyle = bowlingStyle,
-            difficulty = difficulty
+            difficulty = difficulty,
+            appearance = appearance
         )
         store.saveActiveCareer(rookie)
         _uiState.update {
@@ -75,8 +80,8 @@ class CareerViewModel(
                 activeCareer = rookie,
                 latestAuctionDraft = null,
                 latestRetiredLegend = null,
-                lastEventBanner = "Welcome to Domestic Cricket (${difficulty.label} Mode)! Build form & reputation to enter the IPL Auction.",
-                snackbarMessage = "${rookie.name} (${rookie.overallRating} OVR) signed for ${rookie.domesticTeamName} on ${difficulty.label}!"
+                lastEventBanner = "Welcome to Hometown Club Cricket (${difficulty.label} Mode)! Complete Match Objectives to earn a Domestic Call-Up.",
+                snackbarMessage = "${rookie.name} (${rookie.overallRating} OVR) signed for ${rookie.clubTeamName}!"
             )
         }
     }
@@ -95,6 +100,55 @@ class CareerViewModel(
         }
     }
 
+    fun refreshObjectiveForMatchType(matchType: CareerMatchType) {
+        val current = _uiState.value.activeCareer ?: return
+        val newObjective = CareerEngine.generateMatchObjective(current, matchType)
+        if (current.currentObjective?.title == newObjective.title) return
+        val updated = current.copy(currentObjective = newObjective)
+        store.saveActiveCareer(updated)
+        _uiState.update { it.copy(activeCareer = updated) }
+    }
+
+    fun spendSkillPoint(stat: CareerSkillStat) {
+        val current = _uiState.value.activeCareer ?: return
+        val (updated, message) = CareerEngine.spendSkillPoint(current, stat)
+        store.saveActiveCareer(updated)
+        _uiState.update {
+            it.copy(
+                activeCareer = updated,
+                lastEventBanner = message,
+                snackbarMessage = message
+            )
+        }
+    }
+
+    fun completeSelectionTrial() {
+        val current = _uiState.value.activeCareer ?: return
+        val (updated, message) = CareerEngine.runSelectionTrial(current)
+        store.saveActiveCareer(updated)
+        _uiState.update {
+            it.copy(
+                activeCareer = updated,
+                lastEventBanner = message,
+                snackbarMessage = message
+            )
+        }
+    }
+
+    fun promoteToDomestic() {
+        val current = _uiState.value.activeCareer ?: return
+        if (current.stage != CareerStage.CLUB_CRICKET) return
+        val updated = CareerEngine.promoteToDomestic(current)
+        store.saveActiveCareer(updated)
+        _uiState.update {
+            it.copy(
+                activeCareer = updated,
+                lastEventBanner = "Promoted to Domestic Cricket! Compete in First-Class, 50-Over One-Day & Domestic T20 for ${updated.domesticTeamName}.",
+                snackbarMessage = "Promoted to ${updated.domesticTeamName} (+1 Skill Point)!"
+            )
+        }
+    }
+
     fun runTrainingDrill(drill: TrainingDrill) {
         val current = _uiState.value.activeCareer ?: return
         val outcome = CareerEngine.applyTrainingDrill(current, drill)
@@ -108,17 +162,31 @@ class CareerViewModel(
         }
     }
 
-    fun enterIplAuction() {
+    fun enterIplAuction(league: ProT20League = ProT20League.IPL) {
         val current = _uiState.value.activeCareer ?: return
         if (current.stage != CareerStage.DOMESTIC) return
-        val draft = CareerEngine.runIplAuctionDraftEvent(current)
+        val draft = CareerEngine.runIplAuctionDraftEvent(current, league = league)
         store.saveActiveCareer(draft.updatedCareer)
         _uiState.update {
             it.copy(
                 activeCareer = draft.updatedCareer,
                 latestAuctionDraft = draft,
                 lastEventBanner = draft.biddingHighlights.lastOrNull(),
-                snackbarMessage = "🔨 SOLD! ${draft.winningFranchise} bought ${current.name}!"
+                snackbarMessage = "SOLD! ${draft.winningFranchise} signed ${current.name} (${league.displayName})!"
+            )
+        }
+    }
+
+    fun selectProLeague(league: ProT20League) {
+        val current = _uiState.value.activeCareer ?: return
+        if (current.stage != CareerStage.IPL_FRANCHISE || current.activeProLeague == league) return
+        val updated = CareerEngine.switchProLeague(current, league)
+        store.saveActiveCareer(updated)
+        _uiState.update {
+            it.copy(
+                activeCareer = updated,
+                lastEventBanner = "Signed ${league.displayName} contract with ${updated.iplTeamName}!",
+                snackbarMessage = "Joined ${updated.iplTeamName} (${league.displayName})"
             )
         }
     }
@@ -134,7 +202,7 @@ class CareerViewModel(
         _uiState.update {
             it.copy(
                 activeCareer = updated,
-                lastEventBanner = "🌍 Selected for ${updated.nationalTeamName}! Play T20I, ODI, Test & World Cup.",
+                lastEventBanner = "Selected for ${updated.nationalTeamName}! Play T20I, 50-Over ODI, Test & World Championships.",
                 snackbarMessage = "Maiden International Call-Up for ${updated.nationalTeamName}!"
             )
         }
@@ -148,8 +216,19 @@ class CareerViewModel(
             }
             return null
         }
-        val (myTeam, oppTeam) = CareerEngine.buildCareerMatchTeams(current, matchType)
-        return Triple(myTeam, oppTeam, current.difficulty.opponentRatingOffset)
+        if (current.isDropped) {
+            _uiState.update {
+                it.copy(snackbarMessage = "You were dropped from the XI! Complete a Selection Net Trial first.")
+            }
+            return null
+        }
+        val withObjective = current.copy(
+            currentObjective = CareerEngine.generateMatchObjective(current, matchType)
+        )
+        store.saveActiveCareer(withObjective)
+        _uiState.update { it.copy(activeCareer = withObjective) }
+        val (myTeam, oppTeam) = CareerEngine.buildCareerMatchTeams(withObjective, matchType)
+        return Triple(myTeam, oppTeam, withObjective.difficulty.opponentRatingOffset)
     }
 
     fun recordLiveMatchResult(match: LiveMatchState, matchType: CareerMatchType) {
@@ -167,19 +246,28 @@ class CareerViewModel(
             }
             return
         }
+        if (current.isDropped) {
+            _uiState.update {
+                it.copy(snackbarMessage = "You were dropped from the XI! Complete a Selection Net Trial first.")
+            }
+            return
+        }
+        val preparedCareer = current.copy(
+            currentObjective = CareerEngine.generateMatchObjective(current, matchType)
+        )
         viewModelScope.launch {
-            _uiState.update { it.copy(busy = true) }
+            _uiState.update { it.copy(busy = true, activeCareer = preparedCareer) }
             val resolution = withContext(Dispatchers.Default) {
-                val (myTeam, oppTeam) = CareerEngine.buildCareerMatchTeams(current, matchType)
+                val (myTeam, oppTeam) = CareerEngine.buildCareerMatchTeams(preparedCareer, matchType)
                 val initial = MatchSimulationEngine.createMatch(
                     teamA = myTeam,
                     teamB = oppTeam,
                     stage = matchType.stage,
                     format = matchType.format,
-                    teamBRatingOffset = current.difficulty.opponentRatingOffset
+                    teamBRatingOffset = preparedCareer.difficulty.opponentRatingOffset
                 )
                 val finished = MatchSimulationEngine.simulateFullMatch(initial)
-                CareerEngine.resolveCompletedMatch(current, finished, matchType)
+                CareerEngine.resolveCompletedMatch(preparedCareer, finished, matchType)
             }
             handleResolution(resolution)
             _uiState.update { it.copy(busy = false) }
@@ -187,7 +275,7 @@ class CareerViewModel(
     }
 
     private fun handleResolution(resolution: com.example.engine.CareerMatchResolution) {
-        var career = resolution.updatedCareer
+        val career = resolution.updatedCareer
         // Mandatory retirement at age 40 -> automatic Hall of Fame induction
         if (career.age >= 40 && career.stage != CareerStage.RETIRED) {
             val (retired, legend) = CareerEngine.retireToHallOfFame(career)
@@ -199,7 +287,7 @@ class CareerViewModel(
                     activeCareer = null,
                     hallOfFame = updatedHof,
                     latestRetiredLegend = legend,
-                    lastEventBanner = "👑 ${retired.name} retired at age ${retired.age} into the Hall of Fame!",
+                    lastEventBanner = "${retired.name} retired at age ${retired.age} into the Hall of Fame!",
                     snackbarMessage = "Legend Inducted into Hall of Fame & Future Auction Pool!"
                 )
             }
@@ -233,7 +321,7 @@ class CareerViewModel(
                 activeCareer = null,
                 hallOfFame = updatedHof,
                 latestRetiredLegend = legend,
-                lastEventBanner = "👑 ${legend.name} inducted into the Hall of Fame & Future Auction Pool!",
+                lastEventBanner = "${legend.name} inducted into the Hall of Fame & Future Auction Pool!",
                 snackbarMessage = "${legend.name} added to Hall of Fame Legends!"
             )
         }

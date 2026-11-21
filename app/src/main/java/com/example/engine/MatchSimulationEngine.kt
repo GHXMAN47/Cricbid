@@ -938,7 +938,16 @@ object MatchSimulationEngine {
         val effectiveBowlRating = (bowler.bowlingRating + phaseBowlingBonus + pitchBowlBonus + staminaPenalty + dewBowlPenalty).coerceIn(42, 99)
         val baseRatingDiff = ((batter.battingRating - effectiveBowlRating) / 100.0) + chemEdge + pitchBatMod + partnershipMomentum
         val interactiveRatingShift = when (interactiveInput?.role) {
-            InteractivePlayRole.BATTING -> interactiveInput.timingGrade.batEdge + if (interactiveInput.shotDirection.isLofted) 0.07 else 0.0
+            InteractivePlayRole.BATTING -> {
+                val intentShift = when (interactiveInput.shotIntent) {
+                    BattingShotIntent.ATTACK -> 0.04
+                    BattingShotIntent.PUSH_GAP -> 0.02
+                    BattingShotIntent.DEFEND -> -0.05
+                }
+                interactiveInput.timingGrade.batEdge +
+                    (if (interactiveInput.shotDirection.isLofted && interactiveInput.shotIntent != BattingShotIntent.DEFEND) 0.06 else 0.0) +
+                    intentShift
+            }
             InteractivePlayRole.BOWLING -> -interactiveInput.timingGrade.bowlEdge
             null -> 0.0
         }
@@ -1181,8 +1190,8 @@ object MatchSimulationEngine {
         )
         val commentary = if (interactiveInput != null) {
             val tag = when (interactiveInput.role) {
-                InteractivePlayRole.BATTING -> "[${interactiveInput.timingGrade.shortLabel} • ${interactiveInput.shotDirection.label}]"
-                InteractivePlayRole.BOWLING -> "[${interactiveInput.timingGrade.shortLabel} • ${interactiveInput.deliveryType.label} ${interactiveInput.deliveryType.speedKph}kph]"
+                InteractivePlayRole.BATTING -> "[${interactiveInput.timingGrade.shortLabel} • ${interactiveInput.shotIntent.shortLabel} ${interactiveInput.shotDirection.shortLabel}]"
+                InteractivePlayRole.BOWLING -> "[${interactiveInput.timingGrade.shortLabel} • ${interactiveInput.deliveryType.label} ${interactiveInput.bowlingLine.shortLabel} ${interactiveInput.deliveryType.effectiveSpeedKph(bowlerEntryBefore.stamina, dewActive)}kph]"
             }
             "$tag $baseCommentary"
         } else {
@@ -1237,7 +1246,15 @@ object MatchSimulationEngine {
             null -> random.nextFloat().coerceIn(0.06f, 0.92f)
         }
         val pitchX = when {
-            outcome == BallOutcomeType.WIDE -> if (random.nextBoolean()) -0.92f else 0.92f
+            outcome == BallOutcomeType.WIDE -> if (interactiveInput?.bowlingLine == BowlingLine.LEG_STUMP) 0.92f else -0.92f
+            interactiveInput?.role == InteractivePlayRole.BOWLING -> {
+                val jitter = when (interactiveInput.timingGrade) {
+                    TimingGrade.PERFECT -> 0.08f
+                    TimingGrade.GOOD -> 0.16f
+                    TimingGrade.EARLY, TimingGrade.LATE -> 0.30f
+                }
+                (interactiveInput.bowlingLine.targetPitchX + (random.nextFloat() - 0.5f) * 2f * jitter).coerceIn(-0.88f, 0.88f)
+            }
             bowler.role == PlayerRole.SPINNER -> ((random.nextFloat() - 0.45f) * 1.1f).coerceIn(-0.85f, 0.85f)
             else -> ((random.nextFloat() - 0.55f) * 1.0f).coerceIn(-0.85f, 0.85f)
         }
@@ -1809,9 +1826,9 @@ object MatchSimulationEngine {
         var pWicket: Double
         var pSix: Double
         var pFour: Double
-        val pTriple: Double
-        val pDouble: Double
-        val pSingle: Double
+        var pTriple: Double
+        var pDouble: Double
+        var pSingle: Double
 
         when (format) {
             MatchFormat.T20I -> {
@@ -1864,40 +1881,99 @@ object MatchSimulationEngine {
                 InteractivePlayRole.BATTING -> {
                     val loftBonus = if (interactiveInput.shotDirection.isLofted) 0.11 else 0.0
                     val loftRisk = if (interactiveInput.shotDirection.isLofted) 0.035 else 0.0
-                    when (interactiveInput.timingGrade) {
-                        TimingGrade.PERFECT -> {
-                            pSix = (pSix + 0.14 + loftBonus).coerceAtMost(0.42)
-                            pFour = (pFour + 0.16).coerceAtMost(0.36)
-                            pWicket = (pWicket - 0.03 + loftRisk * 0.35).coerceAtLeast(0.008)
+                    when (interactiveInput.shotIntent) {
+                        BattingShotIntent.ATTACK -> {
+                            when (interactiveInput.timingGrade) {
+                                TimingGrade.PERFECT -> {
+                                    pSix = (pSix + 0.16 + loftBonus).coerceAtMost(0.45)
+                                    pFour = (pFour + 0.17).coerceAtMost(0.38)
+                                    pWicket = (pWicket - 0.025 + loftRisk * 0.4).coerceAtLeast(0.010)
+                                }
+                                TimingGrade.GOOD -> {
+                                    pFour = (pFour + 0.08).coerceAtMost(0.32)
+                                    pSix = (pSix + 0.05 + loftBonus * 0.5).coerceAtMost(0.30)
+                                    pWicket = (pWicket + 0.012 + loftRisk * 0.65).coerceIn(0.012, 0.18)
+                                }
+                                TimingGrade.EARLY, TimingGrade.LATE -> {
+                                    pSix = (pSix * 0.35).coerceAtLeast(0.005)
+                                    pFour = (pFour * 0.45).coerceAtLeast(0.015)
+                                    pWicket = (pWicket + interactiveInput.timingGrade.riskDelta + 0.02 + loftRisk).coerceAtMost(0.30)
+                                }
+                            }
                         }
-                        TimingGrade.GOOD -> {
-                            pFour = (pFour + 0.07).coerceAtMost(0.30)
-                            pSix = (pSix + 0.04 + loftBonus * 0.5).coerceAtMost(0.28)
-                            pWicket = (pWicket + loftRisk * 0.6).coerceIn(0.01, 0.16)
+                        BattingShotIntent.PUSH_GAP -> {
+                            // Finding gaps: sharply boosts singles/doubles/triples, moderate fours, lower wicket risk
+                            when (interactiveInput.timingGrade) {
+                                TimingGrade.PERFECT -> {
+                                    pSix = (pSix * 0.25).coerceAtLeast(0.004)
+                                    pFour = (pFour + 0.10).coerceAtMost(0.30)
+                                    pTriple = (pTriple + 0.035).coerceAtMost(0.06)
+                                    pDouble = (pDouble + 0.16).coerceAtMost(0.28)
+                                    pSingle = (pSingle + 0.14).coerceAtMost(0.50)
+                                    pWicket = (pWicket * 0.45).coerceAtLeast(0.006)
+                                }
+                                TimingGrade.GOOD -> {
+                                    pSix = (pSix * 0.20).coerceAtLeast(0.002)
+                                    pFour = (pFour + 0.03).coerceAtMost(0.22)
+                                    pDouble = (pDouble + 0.10).coerceAtMost(0.22)
+                                    pSingle = (pSingle + 0.14).coerceAtMost(0.50)
+                                    pWicket = (pWicket * 0.65).coerceAtLeast(0.008)
+                                }
+                                TimingGrade.EARLY, TimingGrade.LATE -> {
+                                    pSix = 0.002
+                                    pFour = (pFour * 0.35).coerceAtLeast(0.01)
+                                    pSingle = (pSingle * 0.85).coerceAtLeast(0.18)
+                                    pWicket = (pWicket + interactiveInput.timingGrade.riskDelta * 0.65).coerceAtMost(0.16)
+                                }
+                            }
                         }
-                        TimingGrade.EARLY, TimingGrade.LATE -> {
-                            pSix = (pSix * 0.35).coerceAtLeast(0.005)
-                            pFour = (pFour * 0.45).coerceAtLeast(0.015)
-                            pWicket = (pWicket + interactiveInput.timingGrade.riskDelta + loftRisk).coerceAtMost(0.28)
+                        BattingShotIntent.DEFEND -> {
+                            // Solid defensive technique: minimal boundary/six, huge wicket safety
+                            pSix = 0.001
+                            pFour = (pFour * 0.22).coerceAtLeast(0.006)
+                            pTriple = 0.002
+                            pDouble = (pDouble * 0.35).coerceAtLeast(0.01)
+                            when (interactiveInput.timingGrade) {
+                                TimingGrade.PERFECT, TimingGrade.GOOD -> {
+                                    pSingle = (pSingle * 0.60).coerceAtLeast(0.12)
+                                    pWicket = (pWicket * 0.28).coerceAtLeast(0.004)
+                                }
+                                TimingGrade.EARLY, TimingGrade.LATE -> {
+                                    pSingle = (pSingle * 0.35).coerceAtLeast(0.08)
+                                    pWicket = (pWicket * 0.72 + 0.015).coerceAtMost(0.09)
+                                }
+                            }
                         }
                     }
                 }
                 InteractivePlayRole.BOWLING -> {
                     val deliveryWktBonus = interactiveInput.deliveryType.wicketBonus
+                    val lineWktBonus = when (interactiveInput.bowlingLine) {
+                        BowlingLine.OFF_STUMP -> 0.014
+                        BowlingLine.MIDDLE_STUMP -> 0.018
+                        BowlingLine.LEG_STUMP -> 0.006
+                        BowlingLine.WIDE_OUTSIDE -> 0.004
+                    }
                     when (interactiveInput.timingGrade) {
                         TimingGrade.PERFECT -> {
-                            pWicket = (pWicket + 0.055 + deliveryWktBonus).coerceAtMost(0.24)
-                            pSix = (pSix * 0.35).coerceAtLeast(0.005)
-                            pFour = (pFour * 0.45).coerceAtLeast(0.02)
+                            pWicket = (pWicket + 0.055 + deliveryWktBonus + lineWktBonus).coerceAtMost(0.26)
+                            val boundaryMult = if (interactiveInput.bowlingLine == BowlingLine.WIDE_OUTSIDE) 0.28 else 0.36
+                            pSix = (pSix * boundaryMult).coerceAtLeast(0.004)
+                            pFour = (pFour * (boundaryMult + 0.08)).coerceAtLeast(0.018)
                         }
                         TimingGrade.GOOD -> {
-                            pWicket = (pWicket + 0.018 + deliveryWktBonus * 0.5).coerceAtMost(0.18)
-                            pSix = (pSix * 0.70).coerceAtLeast(0.01)
+                            pWicket = (pWicket + 0.018 + (deliveryWktBonus + lineWktBonus) * 0.5).coerceAtMost(0.19)
+                            val boundaryMult = if (interactiveInput.bowlingLine == BowlingLine.WIDE_OUTSIDE) 0.58 else 0.70
+                            pSix = (pSix * boundaryMult).coerceAtLeast(0.008)
+                            pFour = (pFour * (if (interactiveInput.bowlingLine == BowlingLine.WIDE_OUTSIDE) 0.75 else 0.90)).coerceAtLeast(0.03)
                         }
                         TimingGrade.EARLY, TimingGrade.LATE -> {
                             pWicket = (pWicket * 0.45).coerceAtLeast(0.006)
                             pFour = (pFour + 0.09).coerceAtMost(0.32)
                             pSix = (pSix + 0.06).coerceAtMost(0.26)
+                            if (interactiveInput.bowlingLine == BowlingLine.WIDE_OUTSIDE || interactiveInput.bowlingLine == BowlingLine.LEG_STUMP) {
+                                pWide = (pWide + 0.025).coerceAtMost(0.09)
+                            }
                         }
                     }
                 }
@@ -2127,4 +2203,416 @@ object MatchSimulationEngine {
     }
 
     fun formatRate(rate: Double): String = String.format(Locale.US, "%.2f", rate)
+
+    /**
+     * Generates a timed interactive fielding prompt (catch, diving boundary stop, direct-hit run-out,
+     * or sharp throw) during opponent batting phases so fielding feels active in both Player-Only
+     * and Full-Team modes.
+     */
+    fun maybeCreateFieldingPrompt(
+        state: LiveMatchState,
+        userTeamId: String,
+        careerPlayerId: String?,
+        careerPlayerName: String?,
+        promptId: Long,
+        triggerChance: Double = 0.26,
+        random: Random = Random.Default
+    ): FieldingPromptEvent? {
+        if (state.finished || state.isSuperOverActive || state.pendingDrs != null) return null
+        if (InteractivePhaseResolver.isUserTeamBatting(state, userTeamId)) return null
+        val inn = state.activeInnings
+        if (inn.completed || inn.legalBalls == 0) return null
+        val lastBall = inn.recentBalls.lastOrNull() ?: return null
+        if (lastBall.outcome == BallOutcomeType.WICKET || lastBall.outcome == BallOutcomeType.SIX ||
+            lastBall.outcome == BallOutcomeType.WIDE || lastBall.outcome == BallOutcomeType.NO_BALL
+        ) {
+            return null
+        }
+        if (random.nextDouble() > triggerChance) return null
+
+        val fielderName = if (!careerPlayerId.isNullOrBlank() && !careerPlayerName.isNullOrBlank()) {
+            careerPlayerName
+        } else {
+            inn.bowlingTeamFullXi.firstOrNull { it.id != inn.currentBowler?.id }?.name ?: "Cover Fielder"
+        }
+        val isCareer = !careerPlayerId.isNullOrBlank()
+        val batterName = lastBall.batterName
+
+        return when (lastBall.outcome) {
+            BallOutcomeType.FOUR -> FieldingPromptEvent(
+                id = promptId,
+                type = FieldingActionType.BOUNDARY_STOP,
+                fielderName = fielderName,
+                batterName = batterName,
+                headline = "$fielderName racing to the rope!",
+                subtitle = "Tap at the green zone to dive & cut off the boundary (save 2 runs)",
+                runsAtStake = 2,
+                isCareerPlayerInvolved = isCareer
+            )
+            BallOutcomeType.DOUBLE, BallOutcomeType.TRIPLE -> FieldingPromptEvent(
+                id = promptId,
+                type = FieldingActionType.DIRECT_HIT_RUN_OUT,
+                fielderName = fielderName,
+                batterName = batterName,
+                headline = "Tight second run — $fielderName swoops in!",
+                subtitle = "PERFECT = Direct-Hit RUN OUT! GOOD = Sharp throw saves 1 run",
+                runsAtStake = 1,
+                isCareerPlayerInvolved = isCareer
+            )
+            BallOutcomeType.SINGLE -> FieldingPromptEvent(
+                id = promptId,
+                type = FieldingActionType.SHARP_THROW,
+                fielderName = fielderName,
+                batterName = batterName,
+                headline = "Quick single tested against $fielderName's arm!",
+                subtitle = "PERFECT = Direct-Hit RUN OUT! GOOD = Flat throw stops extra run",
+                runsAtStake = 1,
+                isCareerPlayerInvolved = isCareer
+            )
+            BallOutcomeType.DOT -> FieldingPromptEvent(
+                id = promptId,
+                type = FieldingActionType.CATCH,
+                fielderName = fielderName,
+                batterName = batterName,
+                headline = "IN THE AIR! $batterName spoons it towards $fielderName!",
+                subtitle = "Hit PERFECT or GOOD to take a diving catch!",
+                runsAtStake = 0,
+                isCareerPlayerInvolved = isCareer
+            )
+            else -> null
+        }
+    }
+
+    /**
+     * Resolves a timed fielding prompt on [LiveMatchState], applying real wickets, saved runs,
+     * or missed-chance commentary cleanly.
+     */
+    fun applyFieldingActionOutcome(
+        state: LiveMatchState,
+        prompt: FieldingPromptEvent,
+        grade: TimingGrade,
+        timedOut: Boolean = false,
+        random: Random = Random.Default
+    ): LiveMatchState {
+        if (state.finished || state.isSuperOverActive) return state
+        val inn = state.activeInnings
+        if (inn.completed) return state
+        val effectiveGrade = if (timedOut) TimingGrade.LATE else grade
+        val overLabel = "${inn.legalBalls / 6}.${inn.legalBalls % 6}"
+
+        val updatedBatting = inn.battingCard.toMutableList()
+        val updatedBowling = inn.bowlingCard.toMutableList()
+        val updatedFow = inn.fallOfWickets.toMutableList()
+        val updatedWicketOvers = inn.wicketOvers.toMutableList()
+
+        val batterIdx = inn.strikerIdx.coerceIn(0, (updatedBatting.size - 1).coerceAtLeast(0))
+        val bowlerIdx = inn.currentBowlerIdx.coerceIn(0, (updatedBowling.size - 1).coerceAtLeast(0))
+        var totalRuns = inn.totalRuns
+        var wickets = inn.wickets
+        var partnership = inn.partnershipRuns
+        var strikerIdx = inn.strikerIdx
+        var nextBatterIdx = inn.nextBatterIdx
+        var eventOutcome = BallOutcomeType.DOT
+        var eventRuns = 0
+        val note: String
+
+        when (prompt.type) {
+            FieldingActionType.CATCH -> {
+                if (effectiveGrade == TimingGrade.PERFECT || effectiveGrade == TimingGrade.GOOD) {
+                    val b = updatedBatting[batterIdx]
+                    val bw = updatedBowling[bowlerIdx]
+                    wickets += 1
+                    partnership = 0
+                    updatedBatting[batterIdx] = b.copy(
+                        out = true,
+                        dismissalText = "c ${prompt.fielderName} b ${bw.playerName}"
+                    )
+                    updatedBowling[bowlerIdx] = bw.copy(wickets = bw.wickets + 1)
+                    updatedFow.add(FallOfWicket(wickets, totalRuns, overLabel, b.playerName))
+                    updatedWicketOvers.add((inn.legalBalls - 1).coerceAtLeast(0) / 6 + 1)
+                    if (nextBatterIdx < inn.battingLineup.size) {
+                        strikerIdx = nextBatterIdx
+                        updatedBatting[nextBatterIdx] = updatedBatting[nextBatterIdx].copy(dismissalText = "batting")
+                        nextBatterIdx += 1
+                    }
+                    eventOutcome = BallOutcomeType.WICKET
+                    note = "🧤 SENSATIONAL CATCH by ${prompt.fielderName}! ${b.playerName} has to walk!"
+                } else {
+                    val extra = 1
+                    totalRuns += extra
+                    partnership += extra
+                    val b = updatedBatting[batterIdx]
+                    val bw = updatedBowling[bowlerIdx]
+                    updatedBatting[batterIdx] = b.copy(runs = b.runs + extra)
+                    updatedBowling[bowlerIdx] = bw.copy(runsConceded = bw.runsConceded + extra)
+                    eventOutcome = BallOutcomeType.SINGLE
+                    eventRuns = extra
+                    note = "😬 DROPPED! ${prompt.fielderName} couldn't cling on — batters sneak +$extra run!"
+                }
+            }
+            FieldingActionType.BOUNDARY_STOP -> {
+                if (effectiveGrade == TimingGrade.PERFECT || effectiveGrade == TimingGrade.GOOD) {
+                    val saved = if (effectiveGrade == TimingGrade.PERFECT) 3 else 2
+                    val actualSaved = saved.coerceAtMost(totalRuns)
+                    totalRuns = (totalRuns - actualSaved).coerceAtLeast(0)
+                    partnership = (partnership - actualSaved).coerceAtLeast(0)
+                    val b = updatedBatting[batterIdx]
+                    val bw = updatedBowling[bowlerIdx]
+                    updatedBatting[batterIdx] = b.copy(
+                        runs = (b.runs - actualSaved).coerceAtLeast(0),
+                        fours = (b.fours - 1).coerceAtLeast(0)
+                    )
+                    updatedBowling[bowlerIdx] = bw.copy(runsConceded = (bw.runsConceded - actualSaved).coerceAtLeast(0))
+                    note = "🔥 ELECTRIC DIVE! ${prompt.fielderName} flicks the ball back inside the rope — saves $actualSaved runs!"
+                } else {
+                    note = "💨 Just past ${prompt.fielderName}'s outstretched hand — boundary stands!"
+                }
+            }
+            FieldingActionType.DIRECT_HIT_RUN_OUT, FieldingActionType.SHARP_THROW -> {
+                when (effectiveGrade) {
+                    TimingGrade.PERFECT -> {
+                        val b = updatedBatting[batterIdx]
+                        wickets += 1
+                        partnership = 0
+                        updatedBatting[batterIdx] = b.copy(
+                            out = true,
+                            dismissalText = "run out (${prompt.fielderName})"
+                        )
+                        updatedFow.add(FallOfWicket(wickets, totalRuns, overLabel, b.playerName))
+                        updatedWicketOvers.add((inn.legalBalls - 1).coerceAtLeast(0) / 6 + 1)
+                        if (nextBatterIdx < inn.battingLineup.size) {
+                            strikerIdx = nextBatterIdx
+                            updatedBatting[nextBatterIdx] = updatedBatting[nextBatterIdx].copy(dismissalText = "batting")
+                            nextBatterIdx += 1
+                        }
+                        eventOutcome = BallOutcomeType.WICKET
+                        note = "🎯 DIRECT HIT RUN OUT! ${prompt.fielderName} shatters the stumps — ${b.playerName} is GONE!"
+                    }
+                    TimingGrade.GOOD -> {
+                        val saved = 1.coerceAtMost(totalRuns)
+                        totalRuns = (totalRuns - saved).coerceAtLeast(0)
+                        partnership = (partnership - saved).coerceAtLeast(0)
+                        val b = updatedBatting[batterIdx]
+                        val bw = updatedBowling[bowlerIdx]
+                        updatedBatting[batterIdx] = b.copy(runs = (b.runs - saved).coerceAtLeast(0))
+                        updatedBowling[bowlerIdx] = bw.copy(runsConceded = (bw.runsConceded - saved).coerceAtLeast(0))
+                        note = "⚡ Bullet throw from ${prompt.fielderName}! Keeps the batters honest & saves $saved run!"
+                    }
+                    TimingGrade.EARLY, TimingGrade.LATE -> {
+                        val overthrow = 1
+                        totalRuns += overthrow
+                        partnership += overthrow
+                        val b = updatedBatting[batterIdx]
+                        val bw = updatedBowling[bowlerIdx]
+                        updatedBatting[batterIdx] = b.copy(runs = b.runs + overthrow)
+                        updatedBowling[bowlerIdx] = bw.copy(runsConceded = bw.runsConceded + overthrow)
+                        eventOutcome = BallOutcomeType.SINGLE
+                        eventRuns = overthrow
+                        note = "⚠️ Wild throw from ${prompt.fielderName} — +$overthrow overthrow run conceded!"
+                    }
+                }
+            }
+        }
+
+        val chaseWon = state.activeInningsNumber == 2 && totalRuns > state.innings1.totalRuns
+        val inningsEnded = wickets >= 10 || inn.legalBalls >= state.format.maxBalls || chaseWon
+        val finalBatting = if (inningsEnded) {
+            updatedBatting.map { if (it.dismissalText == "batting") it.copy(dismissalText = "not out") else it }
+        } else updatedBatting
+
+        val scoreAfter = "$totalRuns/$wickets (${inn.legalBalls / 6}.${inn.legalBalls % 6})"
+        val fieldingEvent = BallEvent(
+            inningsNumber = state.activeInningsNumber,
+            overLabel = overLabel,
+            batterName = prompt.batterName,
+            bowlerName = prompt.fielderName,
+            runsScored = eventRuns,
+            outcome = eventOutcome,
+            commentary = note,
+            scoreAfterBall = scoreAfter
+        )
+
+        val updatedInnings = inn.copy(
+            totalRuns = totalRuns,
+            wickets = wickets,
+            partnershipRuns = partnership,
+            strikerIdx = strikerIdx,
+            nextBatterIdx = nextBatterIdx,
+            battingCard = finalBatting,
+            bowlingCard = updatedBowling,
+            fallOfWickets = updatedFow,
+            wicketOvers = updatedWicketOvers,
+            completed = inningsEnded
+        )
+        val updatedFeed = (listOf(fieldingEvent) + state.commentaryFeed).take(220)
+
+        return if (state.activeInningsNumber == 1) {
+            state.copy(
+                innings1 = updatedInnings,
+                activeInningsNumber = if (inningsEnded) 2 else 1,
+                commentaryFeed = updatedFeed
+            )
+        } else {
+            val next = state.copy(innings2 = updatedInnings, commentaryFeed = updatedFeed)
+            if (inningsEnded) finalizeOrTriggerSuperOver(next, random) else next
+        }
+    }
+
+    /**
+     * Generates a live Running Between the Wickets prompt after a gap/ground single or double
+     * so the batter can call for an aggressive extra run or stay safely in the crease.
+     */
+    fun maybeCreateRunningPrompt(
+        state: LiveMatchState,
+        lastBall: BallEvent?,
+        shotIntent: BattingShotIntent,
+        promptId: Long,
+        random: Random = Random.Default
+    ): RunningBetweenWicketsPrompt? {
+        if (state.finished || state.isSuperOverActive || state.pendingDrs != null || lastBall == null) return null
+        if (lastBall.outcome != BallOutcomeType.SINGLE && lastBall.outcome != BallOutcomeType.DOUBLE) return null
+        val triggerChance = when (shotIntent) {
+            BattingShotIntent.PUSH_GAP -> 0.55
+            BattingShotIntent.ATTACK -> 0.25
+            BattingShotIntent.DEFEND -> 0.18
+        }
+        if (random.nextDouble() > triggerChance) return null
+        val targetTotal = lastBall.runsScored + 1
+        return RunningBetweenWicketsPrompt(
+            id = promptId,
+            batterName = lastBall.batterName,
+            baseRuns = lastBall.runsScored,
+            headline = "Gap in the deep! Push for $targetTotal?",
+            subtitle = "Tap PUSH +1 in the green zone to steal an extra run — late tap risks a run-out!"
+        )
+    }
+
+    /**
+     * Resolves an interactive Running Between the Wickets call.
+     */
+    fun applyRunningBetweenWickets(
+        state: LiveMatchState,
+        pushForExtraRun: Boolean,
+        grade: TimingGrade,
+        random: Random = Random.Default
+    ): LiveMatchState {
+        if (state.finished || state.isSuperOverActive) return state
+        val inn = state.activeInnings
+        if (inn.completed) return state
+        val overLabel = "${inn.legalBalls / 6}.${inn.legalBalls % 6}"
+
+        if (!pushForExtraRun) {
+            val holdEvent = BallEvent(
+                inningsNumber = state.activeInningsNumber,
+                overLabel = overLabel,
+                batterName = inn.striker?.name ?: "Batter",
+                bowlerName = inn.currentBowler?.name ?: "Fielder",
+                runsScored = 0,
+                outcome = BallOutcomeType.DOT,
+                commentary = "🏃 Safe call! Batters stay grounded and protect their wicket.",
+                scoreAfterBall = "${inn.totalRuns}/${inn.wickets} (${inn.oversFormatted})"
+            )
+            return state.copy(commentaryFeed = (listOf(holdEvent) + state.commentaryFeed).take(220))
+        }
+
+        val updatedBatting = inn.battingCard.toMutableList()
+        val updatedBowling = inn.bowlingCard.toMutableList()
+        val updatedFow = inn.fallOfWickets.toMutableList()
+        val updatedWicketOvers = inn.wicketOvers.toMutableList()
+
+        // After an odd run the original striker is at nonStrikerIdx; credit whichever batter is at crease cleanly
+        val runnerIdx = inn.nonStrikerIdx.coerceIn(0, (updatedBatting.size - 1).coerceAtLeast(0))
+        val bowlerIdx = inn.currentBowlerIdx.coerceIn(0, (updatedBowling.size - 1).coerceAtLeast(0))
+        var totalRuns = inn.totalRuns
+        var wickets = inn.wickets
+        var partnership = inn.partnershipRuns
+        var strikerIdx = inn.strikerIdx
+        var nonStrikerIdx = inn.nonStrikerIdx
+        var nextBatterIdx = inn.nextBatterIdx
+        val outcome: BallOutcomeType
+        val runsDelta: Int
+        val note: String
+
+        when (grade) {
+            TimingGrade.PERFECT, TimingGrade.GOOD -> {
+                totalRuns += 1
+                partnership += 1
+                val b = updatedBatting[runnerIdx]
+                val bw = updatedBowling[bowlerIdx]
+                updatedBatting[runnerIdx] = b.copy(runs = b.runs + 1, confidence = (b.confidence + 5).coerceAtMost(100))
+                updatedBowling[bowlerIdx] = bw.copy(runsConceded = bw.runsConceded + 1)
+                // Swap ends after completing the extra run
+                val tmp = strikerIdx
+                strikerIdx = nonStrikerIdx
+                nonStrikerIdx = tmp
+                outcome = BallOutcomeType.SINGLE
+                runsDelta = 1
+                note = "🏃⚡ ELECTRIC RUNNING! ${b.playerName} sprints back to steal +1 extra run!"
+            }
+            TimingGrade.EARLY -> {
+                outcome = BallOutcomeType.DOT
+                runsDelta = 0
+                note = "🏃 Close call! Sent back just in time — dives safely back into the crease."
+            }
+            TimingGrade.LATE -> {
+                val b = updatedBatting[runnerIdx]
+                wickets += 1
+                partnership = 0
+                updatedBatting[runnerIdx] = b.copy(out = true, dismissalText = "run out (tight single)")
+                updatedFow.add(FallOfWicket(wickets, totalRuns, overLabel, b.playerName))
+                updatedWicketOvers.add((inn.legalBalls - 1).coerceAtLeast(0) / 6 + 1)
+                if (nextBatterIdx < inn.battingLineup.size) {
+                    if (runnerIdx == strikerIdx) strikerIdx = nextBatterIdx else nonStrikerIdx = nextBatterIdx
+                    updatedBatting[nextBatterIdx] = updatedBatting[nextBatterIdx].copy(dismissalText = "batting")
+                    nextBatterIdx += 1
+                }
+                outcome = BallOutcomeType.WICKET
+                runsDelta = 0
+                note = "💥 RUN OUT! Hesitation between the wickets — ${b.playerName} is caught short of the crease!"
+            }
+        }
+
+        val chaseWon = state.activeInningsNumber == 2 && totalRuns > state.innings1.totalRuns
+        val inningsEnded = wickets >= 10 || inn.legalBalls >= state.format.maxBalls || chaseWon
+        val finalBatting = if (inningsEnded) {
+            updatedBatting.map { if (it.dismissalText == "batting") it.copy(dismissalText = "not out") else it }
+        } else updatedBatting
+
+        val runEvent = BallEvent(
+            inningsNumber = state.activeInningsNumber,
+            overLabel = overLabel,
+            batterName = updatedBatting.getOrNull(runnerIdx)?.playerName ?: "Batter",
+            bowlerName = inn.currentBowler?.name ?: "Fielder",
+            runsScored = runsDelta,
+            outcome = outcome,
+            commentary = note,
+            scoreAfterBall = "$totalRuns/$wickets (${inn.legalBalls / 6}.${inn.legalBalls % 6})"
+        )
+
+        val updatedInnings = inn.copy(
+            totalRuns = totalRuns,
+            wickets = wickets,
+            partnershipRuns = partnership,
+            strikerIdx = strikerIdx,
+            nonStrikerIdx = nonStrikerIdx,
+            nextBatterIdx = nextBatterIdx,
+            battingCard = finalBatting,
+            bowlingCard = updatedBowling,
+            fallOfWickets = updatedFow,
+            wicketOvers = updatedWicketOvers,
+            completed = inningsEnded
+        )
+        val updatedFeed = (listOf(runEvent) + state.commentaryFeed).take(220)
+
+        return if (state.activeInningsNumber == 1) {
+            state.copy(
+                innings1 = updatedInnings,
+                activeInningsNumber = if (inningsEnded) 2 else 1,
+                commentaryFeed = updatedFeed
+            )
+        } else {
+            val next = state.copy(innings2 = updatedInnings, commentaryFeed = updatedFeed)
+            if (inningsEnded) finalizeOrTriggerSuperOver(next, random) else next
+        }
+    }
 }

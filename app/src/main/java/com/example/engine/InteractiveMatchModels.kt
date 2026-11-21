@@ -27,6 +27,108 @@ enum class InteractivePlayFilter(
     )
 }
 
+enum class CareerControlMode(
+    val label: String,
+    val shortLabel: String,
+    val description: String
+) {
+    PLAYER_ONLY(
+        label = "Player-Only Gameplay",
+        shortLabel = "PLAYER ONLY",
+        description = "Play only when your created player bats, bowls, or fields; rest auto-sims"
+    ),
+    FULL_TEAM(
+        label = "Full-Team Gameplay",
+        shortLabel = "FULL TEAM",
+        description = "Control the entire XI while highlighting your created player"
+    )
+}
+
+enum class BattingShotIntent(
+    val label: String,
+    val shortLabel: String,
+    val description: String
+) {
+    ATTACK(
+        label = "Attack",
+        shortLabel = "ATTACK",
+        description = "Hunt boundaries with higher loft & edge risk"
+    ),
+    PUSH_GAP(
+        label = "Push Gap",
+        shortLabel = "PUSH GAP",
+        description = "Place into gaps to rotate strike & run twos"
+    ),
+    DEFEND(
+        label = "Defend",
+        shortLabel = "DEFEND",
+        description = "Dead-bat block to protect wicket & build focus"
+    )
+}
+
+enum class BowlingLine(
+    val label: String,
+    val shortLabel: String,
+    val targetPitchX: Float,
+    val description: String
+) {
+    OFF_STUMP(
+        label = "Off Stump",
+        shortLabel = "OFF",
+        targetPitchX = -0.34f,
+        description = "Corridor of uncertainty for outside edges"
+    ),
+    MIDDLE_STUMP(
+        label = "Middle",
+        shortLabel = "MID",
+        targetPitchX = 0.0f,
+        description = "Stump-to-stump line for LBW & bowled"
+    ),
+    LEG_STUMP(
+        label = "Leg Side",
+        shortLabel = "LEG",
+        targetPitchX = 0.34f,
+        description = "Cramp batter on pads & block off-side"
+    ),
+    WIDE_OUTSIDE(
+        label = "Wide Off",
+        shortLabel = "WIDE",
+        targetPitchX = -0.72f,
+        description = "Keep away from batter's arc in death overs"
+    )
+}
+
+enum class FieldingActionType(
+    val title: String,
+    val buttonLabel: String
+) {
+    CATCH(title = "CATCH CHANCE!", buttonLabel = "CATCH NOW!"),
+    BOUNDARY_STOP(title = "BOUNDARY DIVE!", buttonLabel = "DIVE & STOP!"),
+    DIRECT_HIT_RUN_OUT(title = "RUN-OUT CHANCE!", buttonLabel = "DIRECT HIT!"),
+    SHARP_THROW(title = "SHARP THROW!", buttonLabel = "THROW NOW!")
+}
+
+data class FieldingPromptEvent(
+    val id: Long,
+    val type: FieldingActionType,
+    val fielderName: String,
+    val batterName: String,
+    val headline: String,
+    val subtitle: String,
+    val runsAtStake: Int,
+    val isCareerPlayerInvolved: Boolean = false,
+    val timeLimitMs: Long = 2800L
+)
+
+data class RunningBetweenWicketsPrompt(
+    val id: Long,
+    val batterName: String,
+    val baseRuns: Int,
+    val headline: String,
+    val subtitle: String,
+    val timeLimitMs: Long = 2400L
+)
+
 object InteractivePhaseResolver {
     /**
      * Resolves which team in a [LiveMatchState] belongs to the active user.
@@ -56,10 +158,72 @@ object InteractivePhaseResolver {
     }
 
     /**
+     * Returns true when the created career player is currently on strike batting.
+     */
+    fun isCareerPlayerBatting(
+        match: LiveMatchState,
+        userTeamId: String,
+        careerPlayerId: String?
+    ): Boolean {
+        if (careerPlayerId.isNullOrBlank() || match.finished) return false
+        if (!isUserTeamBatting(match, userTeamId)) return false
+        val strikerId = if (match.isSuperOverActive) {
+            match.activeSuperOverInnings?.striker?.id
+        } else {
+            match.activeInnings.striker?.id
+        }
+        return strikerId == careerPlayerId
+    }
+
+    /**
+     * Returns true when the created career player is currently at the crease (striker or non-striker).
+     */
+    fun isCareerPlayerOnCrease(
+        match: LiveMatchState,
+        userTeamId: String,
+        careerPlayerId: String?
+    ): Boolean {
+        if (careerPlayerId.isNullOrBlank() || match.finished) return false
+        if (!isUserTeamBatting(match, userTeamId)) return false
+        return if (match.isSuperOverActive) {
+            val so = match.activeSuperOverInnings
+            so?.striker?.id == careerPlayerId || so?.batters?.getOrNull(so.nonStrikerIdx)?.id == careerPlayerId
+        } else {
+            match.activeInnings.striker?.id == careerPlayerId ||
+                match.activeInnings.nonStriker?.id == careerPlayerId
+        }
+    }
+
+    /**
+     * Returns true when the created career player is currently bowling this over.
+     */
+    fun isCareerPlayerBowling(
+        match: LiveMatchState,
+        userTeamId: String,
+        careerPlayerId: String?
+    ): Boolean {
+        if (careerPlayerId.isNullOrBlank() || match.finished) return false
+        if (isUserTeamBatting(match, userTeamId)) return false
+        val bowlerId = if (match.isSuperOverActive) {
+            match.activeSuperOverInnings?.bowler?.id
+        } else {
+            match.activeInnings.currentBowler?.id
+        }
+        return bowlerId == careerPlayerId
+    }
+
+    /**
+     * Returns true when the created career player is directly on strike batting OR bowling.
+     */
+    fun isCareerPlayerActiveTurn(
+        match: LiveMatchState,
+        userTeamId: String,
+        careerPlayerId: String?
+    ): Boolean = isCareerPlayerBatting(match, userTeamId, careerPlayerId) ||
+        isCareerPlayerBowling(match, userTeamId, careerPlayerId)
+
+    /**
      * Returns true when the current match phase should be auto-simulated based on [filter].
-     * - [InteractivePlayFilter.BATTING_ONLY]: auto-sim when opponent is batting.
-     * - [InteractivePlayFilter.BOWLING_ONLY]: auto-sim when user's own team is batting.
-     * - [InteractivePlayFilter.BOTH]: never auto-skip phases.
      */
     fun shouldAutoSimCurrentPhase(
         match: LiveMatchState,
@@ -73,6 +237,44 @@ object InteractivePhaseResolver {
             InteractivePlayFilter.BATTING_ONLY -> !userBatting
             InteractivePlayFilter.BOWLING_ONLY -> userBatting
         }
+    }
+
+    /**
+     * Returns true when Player-Only career mode should auto-simulate because it is currently
+     * a teammate's turn (and no live fielding QTE prompt is awaiting player input).
+     */
+    fun shouldAutoSimCareerPlayerOnly(
+        match: LiveMatchState,
+        userTeamId: String,
+        careerPlayerId: String?,
+        controlMode: CareerControlMode,
+        hasPendingFieldingPrompt: Boolean = false
+    ): Boolean {
+        if (match.finished || hasPendingFieldingPrompt) return false
+        if (controlMode != CareerControlMode.PLAYER_ONLY || careerPlayerId.isNullOrBlank()) return false
+        return !isCareerPlayerActiveTurn(match, userTeamId, careerPlayerId)
+    }
+
+    /**
+     * Unified check combining [InteractivePlayFilter] and [CareerControlMode.PLAYER_ONLY].
+     */
+    fun shouldAutoSimAnyReason(
+        match: LiveMatchState,
+        userTeamId: String,
+        filter: InteractivePlayFilter,
+        careerPlayerId: String? = null,
+        controlMode: CareerControlMode = CareerControlMode.FULL_TEAM,
+        hasPendingFieldingPrompt: Boolean = false
+    ): Boolean {
+        if (match.finished || hasPendingFieldingPrompt) return false
+        if (shouldAutoSimCurrentPhase(match, userTeamId, filter)) return true
+        return shouldAutoSimCareerPlayerOnly(
+            match = match,
+            userTeamId = userTeamId,
+            careerPlayerId = careerPlayerId,
+            controlMode = controlMode,
+            hasPendingFieldingPrompt = hasPendingFieldingPrompt
+        )
     }
 
     /**
@@ -232,7 +434,9 @@ data class InteractiveBallInput(
     val shotDirection: ShotDirection = ShotDirection.STRAIGHT,
     val deliveryType: DeliveryType = DeliveryType.GOOD_LENGTH,
     val timingGrade: TimingGrade = TimingGrade.GOOD,
-    val fieldPreset: FieldPreset? = null
+    val fieldPreset: FieldPreset? = null,
+    val shotIntent: BattingShotIntent = BattingShotIntent.ATTACK,
+    val bowlingLine: BowlingLine = BowlingLine.OFF_STUMP
 )
 
 data class ActionAnimationSnapshot(
@@ -250,5 +454,7 @@ data class ActionAnimationSnapshot(
     val isRedBall: Boolean,
     val pitchType: PitchType = PitchType.BALANCED,
     val dewActive: Boolean = false,
-    val fieldPreset: FieldPreset = FieldPreset.BALANCED
+    val fieldPreset: FieldPreset = FieldPreset.BALANCED,
+    val shotIntent: BattingShotIntent = BattingShotIntent.ATTACK,
+    val bowlingLine: BowlingLine = BowlingLine.OFF_STUMP
 )

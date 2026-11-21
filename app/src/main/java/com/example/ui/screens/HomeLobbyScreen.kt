@@ -65,8 +65,10 @@ import com.example.R
 import com.example.data.local.AccountProfile
 import com.example.data.local.SavedMatchResumeSnapshot
 import com.example.data.model.AuctionRoom
+import com.example.data.model.CareerSaveState
 import com.example.data.model.RoomStatus
 import com.example.engine.TrophyCabinetData
+import com.example.ui.components.CareerPlayerPortrait
 import com.example.ui.components.IndianPlayerAvatar
 import com.example.ui.theme.AuctionGold
 import com.example.ui.theme.BoundarySky
@@ -108,6 +110,7 @@ fun HomeLobbyScreen(
     trophyCabinet: TrophyCabinetData = TrophyCabinetData(),
     onOpenTrophyCabinet: () -> Unit = {},
     resumableRoom: AuctionRoom? = null,
+    activeCareer: CareerSaveState? = null,
     modifier: Modifier = Modifier
 ) {
     var createTeamName by rememberSaveable(profile.favoriteTeamName) {
@@ -427,6 +430,185 @@ fun HomeLobbyScreen(
                 }
             }
 
+            // ═══════════════════════════════════════════════════════════════
+            // SECTION 1: PLAYER CAREER MODE (Cricket 26-Style Solo Journey)
+            // Kept clearly separate from Management & Auction Mode
+            // ═══════════════════════════════════════════════════════════════
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "PLAYER CAREER MODE",
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontFamily = DisplayFontFamily,
+                                letterSpacing = 1.2.sp,
+                                color = AuctionGold
+                            )
+                        )
+                        Text(
+                            text = "SINGLE-PLAYER JOURNEY",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 10.sp,
+                                color = BroadcastMuted
+                            )
+                        )
+                    }
+                    Surface(
+                        color = NavySurface,
+                        shape = RoundedCornerShape(20.dp),
+                        border = BorderStroke(1.5.dp, AuctionGold.copy(alpha = 0.8f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(20.dp))
+                            .clickable(onClick = onOpenCareerMode)
+                            .testTag("open_career_mode_button")
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (activeCareer != null) {
+                                    CareerPlayerPortrait(
+                                        appearance = activeCareer.appearance,
+                                        size = 58.dp,
+                                        showJerseyNumber = true,
+                                        isCaptain = activeCareer.isInternationalCaptain
+                                    )
+                                } else {
+                                    Surface(
+                                        color = AuctionGold.copy(alpha = 0.16f),
+                                        shape = RoundedCornerShape(14.dp),
+                                        border = BorderStroke(1.dp, AuctionGold.copy(alpha = 0.55f)),
+                                        modifier = Modifier.size(54.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.Filled.EmojiEvents,
+                                                contentDescription = stringResource(R.string.career_mode_title),
+                                                tint = AuctionGold,
+                                                modifier = Modifier.size(28.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                                Spacer(Modifier.width(14.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Text(
+                                            text = if (activeCareer != null) {
+                                                "${activeCareer.name}${if (activeCareer.isInternationalCaptain) " (C)" else ""}"
+                                            } else {
+                                                "CREATE YOUR CRICKETER"
+                                            },
+                                            style = MaterialTheme.typography.titleMedium.copy(
+                                                fontFamily = DisplayFontFamily,
+                                                letterSpacing = 0.8.sp,
+                                                color = BroadcastWhite
+                                            )
+                                        )
+                                        Surface(
+                                            color = AuctionGold.copy(alpha = 0.2f),
+                                            shape = RoundedCornerShape(6.dp)
+                                        ) {
+                                            Text(
+                                                text = if (activeCareer != null) "${activeCareer.overallRating} OVR" else "NEW PRO",
+                                                style = MaterialTheme.typography.labelSmall.copy(
+                                                    fontFamily = MonoFontFamily,
+                                                    color = AuctionGold,
+                                                    fontWeight = FontWeight.ExtraBold
+                                                ),
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = if (activeCareer != null) {
+                                            "${activeCareer.stage.label} • ${activeCareer.activeClubOrTeam} • ${activeCareer.unlockedAchievements.size}/6 Badges"
+                                        } else {
+                                            "Club → Domestic → IPL / PSL / BBL / Hundred → International → Captaincy"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = BroadcastSilver,
+                                        modifier = Modifier.padding(top = 3.dp)
+                                    )
+                                }
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                    contentDescription = "Open Player Career Mode",
+                                    tint = AuctionGold
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                listOf("T20 • 50-Ov • Test", "Match Objectives", "Skill Tree & Badges").forEach { tag ->
+                                    Surface(
+                                        color = NavySurfaceHigh,
+                                        shape = RoundedCornerShape(8.dp),
+                                        border = BorderStroke(1.dp, NavyOutline),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Box(
+                                            contentAlignment = Alignment.Center,
+                                            modifier = Modifier.padding(vertical = 5.dp, horizontal = 4.dp)
+                                        ) {
+                                            Text(
+                                                text = tag,
+                                                style = MaterialTheme.typography.labelSmall.copy(
+                                                    fontSize = 10.sp,
+                                                    color = TurfEmerald,
+                                                    fontWeight = FontWeight.SemiBold
+                                                ),
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ═══════════════════════════════════════════════════════════════
+            // SECTION 2: MANAGEMENT & AUCTION MODE
+            // Separate Franchise Auction, Squad Builder, Trophy Cabinet & Intl
+            // ═══════════════════════════════════════════════════════════════
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "MANAGEMENT & AUCTION MODE",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontFamily = DisplayFontFamily,
+                            letterSpacing = 1.2.sp,
+                            color = TurfEmerald
+                        )
+                    )
+                    Text(
+                        text = "FRANCHISE & MULTIPLAYER",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 10.sp,
+                            color = BroadcastMuted
+                        )
+                    )
+                }
+            }
+
             // International Cricket Entry Card (T20I • ODI • Test • Series & World Cup)
             item {
                 Surface(
@@ -502,81 +684,6 @@ fun HomeLobbyScreen(
                 }
             }
 
-            // Career Mode (Road to Legend) Entry Card
-            item {
-                Surface(
-                    color = NavySurface,
-                    shape = RoundedCornerShape(18.dp),
-                    border = BorderStroke(1.2.dp, AuctionGold.copy(alpha = 0.65f)),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(18.dp))
-                        .clickable(onClick = onOpenCareerMode)
-                        .testTag("open_career_mode_button")
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Surface(
-                            color = AuctionGold.copy(alpha = 0.16f),
-                            shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(1.dp, AuctionGold.copy(alpha = 0.5f)),
-                            modifier = Modifier.size(48.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Filled.EmojiEvents,
-                                    contentDescription = stringResource(R.string.career_mode_title),
-                                    tint = AuctionGold,
-                                    modifier = Modifier.size(26.dp)
-                                )
-                            }
-                        }
-                        Spacer(Modifier.width(14.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = stringResource(R.string.career_mode_title).uppercase(),
-                                    style = MaterialTheme.typography.titleMedium.copy(
-                                        fontFamily = DisplayFontFamily,
-                                        letterSpacing = 1.sp,
-                                        color = BroadcastWhite
-                                    )
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Surface(
-                                    color = AuctionGold.copy(alpha = 0.2f),
-                                    shape = RoundedCornerShape(6.dp)
-                                ) {
-                                    Text(
-                                        text = "ROAD TO LEGEND",
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            color = AuctionGold,
-                                            fontWeight = FontWeight.Bold
-                                        ),
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
-                            }
-                            Text(
-                                text = stringResource(R.string.career_mode_subtitle),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = BroadcastSilver,
-                                modifier = Modifier.padding(top = 3.dp)
-                            )
-                        }
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                            contentDescription = "Open Career Mode",
-                            tint = AuctionGold
-                        )
-                    }
-                }
-            }
-
             // Trophy Cabinet & Season Awards Entry Card
             item {
                 Surface(
@@ -635,7 +742,7 @@ fun HomeLobbyScreen(
                 }
             }
 
-            // Create / Join Mode Switcher + Action Card
+            // Create / Join Auction Room Mode Switcher + Action Card
             item {
                 Surface(
                     color = NavySurface,
