@@ -27,6 +27,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.EmojiEvents
@@ -38,6 +40,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SportsCricket
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
@@ -64,6 +67,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -118,11 +122,35 @@ fun WelcomeScreen(
     var selectedAvatarId by rememberSaveable(activeProfile?.avatarId) {
         mutableStateOf(activeProfile?.avatarId ?: IndianPlayerAvatars.DEFAULT_ID)
     }
+    val context = LocalContext.current
     var showPassword by remember { mutableStateOf(false) }
     var showBackupRestore by rememberSaveable { mutableStateOf(false) }
     var backupCodeInput by rememberSaveable { mutableStateOf("") }
+    var localFileError by remember { mutableStateOf<String?>(null) }
+
+    val openBackupFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        localFileError = null
+        runCatching {
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                val bytes = stream.readBytes()
+                require(bytes.size <= 512_000) { "Backup file is too large (max 512 KB)." }
+                String(bytes, Charsets.UTF_8)
+            } ?: throw IllegalStateException("Could not open selected backup file.")
+        }.fold(
+            onSuccess = { payload ->
+                onRestoreBackupCode(payload, passwordInput)
+            },
+            onFailure = { err ->
+                localFileError = err.message ?: "Failed to read backup file."
+            }
+        )
+    }
 
     val trimmedUser = usernameInput.trim()
+    val displayAuthError = authErrorMessage ?: localFileError
 
     Box(
         modifier = Modifier
@@ -309,7 +337,7 @@ fun WelcomeScreen(
                         WelcomeModeChip("Create", selectedMode == 2, { selectedMode = 2 }, Modifier.weight(1f).testTag("mode_create_account"))
                     }
 
-                    if (!authErrorMessage.isNullOrBlank()) {
+                    if (!displayAuthError.isNullOrBlank()) {
                         Surface(
                             color = WicketCrimson.copy(alpha = 0.16f),
                             shape = RoundedCornerShape(10.dp),
@@ -317,7 +345,7 @@ fun WelcomeScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = authErrorMessage,
+                                text = displayAuthError,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = BroadcastWhite,
                                 modifier = Modifier.padding(10.dp)
@@ -451,7 +479,10 @@ fun WelcomeScreen(
                                 )
 
                                 Button(
-                                    onClick = { onSignInWithPassword(trimmedUser, passwordInput) },
+                                    onClick = {
+                                        localFileError = null
+                                        onSignInWithPassword(trimmedUser, passwordInput)
+                                    },
                                     enabled = trimmedUser.length >= 2 && passwordInput.length >= 4,
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = TurfEmerald,
@@ -466,17 +497,26 @@ fun WelcomeScreen(
                                     Icon(Icons.Filled.Lock, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(Modifier.width(8.dp))
                                     Text(
-                                        text = "Sign In & Load Profile",
+                                        text = "Sign In / Continue",
                                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                                     )
                                 }
+
+                                Text(
+                                    text = "Fresh install? Entering your username & password sets up your profile immediately — or restore a saved backup below.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = BroadcastMuted,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
                             } else {
                                 OutlinedTextField(
                                     value = backupCodeInput,
                                     onValueChange = { backupCodeInput = it },
-                                    label = { Text("Account Backup Code (CB1-...)") },
+                                    label = { Text("Backup Code (CB2-... / CB1-...) or JSON") },
                                     leadingIcon = { Icon(Icons.Filled.Key, contentDescription = null, tint = AuctionGold) },
-                                    singleLine = true,
+                                    singleLine = false,
+                                    maxLines = 3,
                                     colors = cricBidTextFieldColors(),
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -486,7 +526,7 @@ fun WelcomeScreen(
                                 OutlinedTextField(
                                     value = passwordInput,
                                     onValueChange = { if (it.length <= 32) passwordInput = it },
-                                    label = { Text("Account Password (if protected)") },
+                                    label = { Text("Password (optional — only for locked CB1 codes)") },
                                     leadingIcon = { Icon(Icons.Filled.Lock, contentDescription = null, tint = BoundarySky) },
                                     visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
                                     singleLine = true,
@@ -496,9 +536,17 @@ fun WelcomeScreen(
                                         .testTag("restore_backup_password_input")
                                 )
 
+                                val trimmedCode = backupCodeInput.trim()
+                                val canSubmitCode = trimmedCode.startsWith("CB2-") ||
+                                    trimmedCode.startsWith("CB1-") ||
+                                    trimmedCode.startsWith("{")
+
                                 Button(
-                                    onClick = { onRestoreBackupCode(backupCodeInput, passwordInput) },
-                                    enabled = backupCodeInput.trim().startsWith("CB1-"),
+                                    onClick = {
+                                        localFileError = null
+                                        onRestoreBackupCode(backupCodeInput, passwordInput)
+                                    },
+                                    enabled = canSubmitCode,
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = AuctionGold,
                                         contentColor = OnGoldDark
@@ -510,20 +558,46 @@ fun WelcomeScreen(
                                         .testTag("restore_backup_submit_button")
                                 ) {
                                     Text(
-                                        text = "Restore Profile After Reinstall",
+                                        text = "Restore Account & Career",
                                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                                    )
+                                }
+
+                                OutlinedButton(
+                                    onClick = {
+                                        localFileError = null
+                                        openBackupFileLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                                    },
+                                    border = BorderStroke(1.dp, BoundarySky.copy(alpha = 0.65f)),
+                                    shape = RoundedCornerShape(14.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(48.dp)
+                                        .testTag("restore_backup_json_button")
+                                ) {
+                                    Icon(Icons.Filled.UploadFile, contentDescription = null, tint = BoundarySky, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = "Load Backup .JSON File",
+                                        style = MaterialTheme.typography.labelLarge.copy(
+                                            color = BoundarySky,
+                                            fontWeight = FontWeight.Bold
+                                        )
                                     )
                                 }
                             }
 
                             TextButton(
-                                onClick = { showBackupRestore = !showBackupRestore },
+                                onClick = {
+                                    localFileError = null
+                                    showBackupRestore = !showBackupRestore
+                                },
                                 modifier = Modifier
                                     .align(Alignment.CenterHorizontally)
                                     .testTag("toggle_backup_restore_button")
                             ) {
                                 Text(
-                                    text = if (showBackupRestore) "← Back to Username + Password Sign In" else "Reinstalled? Restore with CB1 Backup Code",
+                                    text = if (showBackupRestore) "← Back to Username + Password Sign In" else "Reinstalled? Restore Backup Code or .JSON File",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = BoundarySky
                                 )

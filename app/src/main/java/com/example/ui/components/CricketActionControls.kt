@@ -47,6 +47,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.engine.CareerControlMode
 import com.example.engine.DeliveryType
 import com.example.engine.FieldPreset
 import com.example.engine.InteractiveBallInput
@@ -89,21 +90,51 @@ fun LeftThumbControlPod(
     batterConfidence: Int = 45,
     bowlerStamina: Int = 100,
     dewActive: Boolean = false,
+    careerPlayerName: String? = null,
+    careerControlMode: CareerControlMode = CareerControlMode.FULL_TEAM,
     compact: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    val isStrictPlayerOnly = careerControlMode == CareerControlMode.PLAYER_ONLY && !careerPlayerName.isNullOrBlank()
     Surface(
         color = NavySurface.copy(alpha = 0.92f),
         shape = RoundedCornerShape(14.dp),
-        border = BorderStroke(1.dp, NavyOutline),
+        border = BorderStroke(1.dp, if (isStrictPlayerOnly) AuctionGold.copy(alpha = 0.7f) else NavyOutline),
         modifier = modifier
     ) {
         Column(
             modifier = Modifier.padding(if (compact) 8.dp else 10.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            // Role Switch Pill (BOTH) or Active Phase Badge (BAT ONLY / BOWL ONLY)
-            if (playFilter == InteractivePlayFilter.BOTH) {
+            // Strict Player-Only Banner OR Role Switch Pill (BOTH) OR Active Phase Badge (BAT ONLY / BOWL ONLY)
+            if (isStrictPlayerOnly) {
+                val badgeAccent = if (activeRole == InteractivePlayRole.BATTING) TurfEmerald else AuctionGold
+                Surface(
+                    color = badgeAccent.copy(alpha = 0.2f),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, badgeAccent.copy(alpha = 0.75f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(30.dp)
+                        .testTag("career_player_only_turn_badge")
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 4.dp)) {
+                        Text(
+                            text = if (activeRole == InteractivePlayRole.BATTING) {
+                                "★ ${careerPlayerName!!.uppercase()} • BAT"
+                            } else {
+                                "★ ${careerPlayerName!!.uppercase()} • BOWL"
+                            },
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.ExtraBold,
+                                color = badgeAccent
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            } else if (playFilter == InteractivePlayFilter.BOTH) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -665,8 +696,8 @@ fun PlayModeFilterStrip(
 }
 
 /**
- * Shown in place of the Timing/Release Pod whenever the current innings is outside
- * the user's selected [InteractivePlayFilter] and is automatically fast-simulating.
+ * Shown in place of the Timing/Release Pod whenever the current phase or deliveries are
+ * automatically fast-simulating (either Team Bat/Bowl filter OR Strict Player-Only Career Mode).
  */
 @Composable
 fun SkippedPhaseAutoSimCard(
@@ -674,19 +705,29 @@ fun SkippedPhaseAutoSimCard(
     playFilter: InteractivePlayFilter,
     onSkipInningsNow: () -> Unit,
     onSwitchToBoth: () -> Unit,
+    careerPlayerName: String? = null,
+    careerControlMode: CareerControlMode = CareerControlMode.FULL_TEAM,
+    careerWaitingStatus: String? = null,
+    onSkipToMyTurn: (() -> Unit)? = null,
+    onSwitchToFullTeam: (() -> Unit)? = null,
     compact: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    val accent = if (playFilter == InteractivePlayFilter.BATTING_ONLY) TurfEmerald else BoundarySky
-    val headline = if (playFilter == InteractivePlayFilter.BATTING_ONLY) {
-        "AUTO-SIMMING OPPONENT"
-    } else {
-        "AUTO-SIMMING YOUR BATTING"
+    val isPlayerOnly = careerControlMode == CareerControlMode.PLAYER_ONLY && !careerPlayerName.isNullOrBlank()
+    val accent = when {
+        isPlayerOnly -> AuctionGold
+        playFilter == InteractivePlayFilter.BATTING_ONLY -> TurfEmerald
+        else -> BoundarySky
     }
-    val sub = if (playFilter == InteractivePlayFilter.BATTING_ONLY) {
-        "$battingTeamName batting • You take over when your team bats"
-    } else {
-        "$battingTeamName batting • You take over when your team bowls"
+    val headline = when {
+        isPlayerOnly -> "SIMMING TO ${careerPlayerName!!.uppercase()}"
+        playFilter == InteractivePlayFilter.BATTING_ONLY -> "AUTO-SIMMING OPPONENT"
+        else -> "AUTO-SIMMING YOUR BATTING"
+    }
+    val sub = when {
+        isPlayerOnly -> careerWaitingStatus ?: "Auto-simming other players • Pauses on $careerPlayerName's turn"
+        playFilter == InteractivePlayFilter.BATTING_ONLY -> "$battingTeamName batting • You take over when your team bats"
+        else -> "$battingTeamName batting • You take over when your team bowls"
     }
 
     Surface(
@@ -718,7 +759,7 @@ fun SkippedPhaseAutoSimCard(
                 overflow = TextOverflow.Ellipsis
             )
             Button(
-                onClick = onSkipInningsNow,
+                onClick = if (isPlayerOnly && onSkipToMyTurn != null) onSkipToMyTurn else onSkipInningsNow,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = AuctionGold,
                     contentColor = OnGoldDark
@@ -728,32 +769,51 @@ fun SkippedPhaseAutoSimCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(44.dp)
-                    .testTag("skip_innings_now_button")
+                    .testTag(if (isPlayerOnly) "skip_to_my_turn_button" else "skip_innings_now_button")
             ) {
                 Icon(Icons.Filled.FastForward, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(4.dp))
                 Text(
-                    text = "SKIP INNINGS NOW",
+                    text = if (isPlayerOnly) "SKIP TO MY TURN" else "SKIP INNINGS NOW",
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            OutlinedButton(
-                onClick = onSwitchToBoth,
-                border = BorderStroke(1.dp, accent.copy(alpha = 0.6f)),
-                shape = RoundedCornerShape(10.dp),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(34.dp)
-                    .testTag("take_control_both_button")
-            ) {
-                Text(
-                    text = "Play Both Sides",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = BroadcastWhite
-                )
+            if (isPlayerOnly && onSwitchToFullTeam != null) {
+                OutlinedButton(
+                    onClick = onSwitchToFullTeam,
+                    border = BorderStroke(1.dp, accent.copy(alpha = 0.6f)),
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(34.dp)
+                        .testTag("switch_full_team_button")
+                ) {
+                    Text(
+                        text = "Switch to Full-Team",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BroadcastWhite
+                    )
+                }
+            } else {
+                OutlinedButton(
+                    onClick = onSwitchToBoth,
+                    border = BorderStroke(1.dp, accent.copy(alpha = 0.6f)),
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(34.dp)
+                        .testTag("take_control_both_button")
+                ) {
+                    Text(
+                        text = "Play Both Sides",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BroadcastWhite
+                    )
+                }
             }
         }
     }

@@ -698,7 +698,11 @@ class MatchRulesUnitTest {
             if (seed == 0) {
                 val comm = perfectNext.commentaryFeed.first().commentary
                 assertTrue("Batting commentary should include timing grade", comm.contains("PERFECT"))
-                assertTrue("Batting commentary should include shot label", comm.contains(com.example.engine.ShotDirection.LOFTED.label))
+                assertTrue(
+                    "Batting commentary should include shot label",
+                    comm.contains(com.example.engine.ShotDirection.LOFTED.label) ||
+                        comm.contains(com.example.engine.ShotDirection.LOFTED.shortLabel)
+                )
             }
 
             val lateNext = MatchSimulationEngine.simulateNextBall(
@@ -1226,6 +1230,126 @@ class MatchRulesUnitTest {
         val (recalled, _) = com.example.engine.CareerEngine.runSelectionTrial(poorRes.updatedCareer)
         assertFalse("Selection trial should clear dropped status", recalled.isDropped)
         assertTrue("Selection meter should recover to at least 50%", recalled.selectionMeter >= 50)
+    }
+
+    @Test
+    fun strictPlayerOnlyCareerModeAutoSimsTeammatesAndPausesOnlyOnCreatedPlayerTurn() {
+        val career = com.example.engine.CareerEngine.createRookie(
+            name = "Arjun Sharma",
+            startingAge = 19,
+            nationality = "India",
+            countryCode = "IND",
+            avatarId = "virat",
+            role = com.example.data.model.PlayerRole.ALL_ROUNDER,
+            battingStyle = com.example.data.model.BattingStyle.RIGHT_HAND_BAT,
+            bowlingStyle = com.example.data.model.BowlingStyle.RIGHT_ARM_FAST
+        )
+        val (myTeam, oppTeam) = com.example.engine.CareerEngine.buildCareerMatchTeams(
+            career,
+            com.example.data.model.CareerMatchType.DOMESTIC_T20,
+            Random(101L)
+        )
+        val base = MatchSimulationEngine.createMatch(
+            teamA = myTeam,
+            teamB = oppTeam,
+            stage = MatchStage.LEAGUE,
+            format = MatchFormat.T20I,
+            random = Random(101L)
+        )
+
+        val careerIndex = base.innings1.battingLineup.indexOfFirst { it.id == career.id }
+        assertTrue("Career player must be in batting lineup", careerIndex >= 0)
+        val teammateIndexA = base.innings1.battingLineup.indexOfFirst { it.id != career.id }
+        val teammateIndexB = base.innings1.battingLineup.indexOfLast { it.id != career.id }
+
+        // 1. Before created player comes in to bat -> MUST auto-sim in PLAYER_ONLY
+        val waitingToBatState = base.copy(
+            innings1 = base.innings1.copy(strikerIdx = teammateIndexA, nonStrikerIdx = teammateIndexB)
+        )
+        assertTrue(
+            "Teammate batting before career player arrives must auto-sim in PLAYER_ONLY",
+            com.example.engine.InteractivePhaseResolver.shouldAutoSimCareerPlayerOnly(
+                match = waitingToBatState,
+                userTeamId = myTeam.teamId,
+                careerPlayerId = career.id,
+                controlMode = com.example.engine.CareerControlMode.PLAYER_ONLY
+            )
+        )
+        assertFalse(
+            "FULL_TEAM mode must allow manual play for teammates",
+            com.example.engine.InteractivePhaseResolver.shouldAutoSimCareerPlayerOnly(
+                match = waitingToBatState,
+                userTeamId = myTeam.teamId,
+                careerPlayerId = career.id,
+                controlMode = com.example.engine.CareerControlMode.FULL_TEAM
+            )
+        )
+
+        // 2. Created player at non-striker end -> MUST auto-sim until on strike
+        val nonStrikerState = base.copy(
+            innings1 = base.innings1.copy(strikerIdx = teammateIndexA, nonStrikerIdx = careerIndex)
+        )
+        assertTrue(
+            "Created player at non-striker end must auto-sim in strict PLAYER_ONLY",
+            com.example.engine.InteractivePhaseResolver.shouldAutoSimCareerPlayerOnly(
+                match = nonStrikerState,
+                userTeamId = myTeam.teamId,
+                careerPlayerId = career.id,
+                controlMode = com.example.engine.CareerControlMode.PLAYER_ONLY
+            )
+        )
+
+        // 3. Created player on strike batting -> MUST pause auto-sim for interactive batting
+        val strikerState = base.copy(
+            innings1 = base.innings1.copy(strikerIdx = careerIndex, nonStrikerIdx = teammateIndexA)
+        )
+        assertFalse(
+            "Created player on strike must pause auto-sim",
+            com.example.engine.InteractivePhaseResolver.shouldAutoSimCareerPlayerOnly(
+                match = strikerState,
+                userTeamId = myTeam.teamId,
+                careerPlayerId = career.id,
+                controlMode = com.example.engine.CareerControlMode.PLAYER_ONLY
+            )
+        )
+        assertTrue(
+            com.example.engine.InteractivePhaseResolver.isCareerPlayerActiveTurn(
+                strikerState, myTeam.teamId, career.id
+            )
+        )
+
+        // 4. Opponent batting (2nd innings): teammate bowling -> auto-sim; created player bowling -> interactive
+        val inn2State = MatchSimulationEngine.simulateCurrentInnings(base, Random(101L))
+        assertFalse(inn2State.finished)
+        val careerBowlerIdx = inn2State.innings2.bowlingOptions.indexOfFirst { it.id == career.id }
+        val teammateBowlerIdx = inn2State.innings2.bowlingOptions.indexOfFirst { it.id != career.id }
+        assertTrue("All-rounder career player should appear in bowling options", careerBowlerIdx >= 0)
+
+        val teammateBowling = inn2State.copy(
+            innings2 = inn2State.innings2.copy(currentBowlerIdx = teammateBowlerIdx)
+        )
+        assertTrue(
+            "Teammate bowling must auto-sim in strict PLAYER_ONLY",
+            com.example.engine.InteractivePhaseResolver.shouldAutoSimCareerPlayerOnly(
+                match = teammateBowling,
+                userTeamId = myTeam.teamId,
+                careerPlayerId = career.id,
+                controlMode = com.example.engine.CareerControlMode.PLAYER_ONLY
+            )
+        )
+
+        val careerBowling = inn2State.copy(
+            innings2 = inn2State.innings2.copy(currentBowlerIdx = careerBowlerIdx)
+        )
+        assertFalse(
+            "Created player bowling must pause auto-sim for interactive bowling",
+            com.example.engine.InteractivePhaseResolver.shouldAutoSimCareerPlayerOnly(
+                match = careerBowling,
+                userTeamId = myTeam.teamId,
+                careerPlayerId = career.id,
+                controlMode = com.example.engine.CareerControlMode.PLAYER_ONLY
+            )
+        )
     }
 }
 

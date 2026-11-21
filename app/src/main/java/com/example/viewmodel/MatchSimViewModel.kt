@@ -8,6 +8,7 @@ import com.example.data.model.MatchFormat
 import com.example.data.model.TeamState
 import com.example.engine.ActionAnimationSnapshot
 import com.example.engine.BallOutcomeType
+import com.example.engine.CareerControlMode
 import com.example.engine.DeliveryType
 import com.example.engine.FieldPreset
 import com.example.engine.InteractiveBallInput
@@ -19,6 +20,7 @@ import com.example.engine.MatchSimulationEngine
 import com.example.engine.PitchType
 import com.example.engine.ShotDirection
 import com.example.engine.WeatherCondition
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,6 +29,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 enum class PlaybackSpeed(val label: String, val delayMs: Long) {
     NORMAL("1x", 850L),
@@ -45,7 +48,11 @@ data class MatchSimUiState(
     val playFilter: InteractivePlayFilter = InteractivePlayFilter.BOTH,
     val showPlayModeSetup: Boolean = false,
     val autoSimmingSkippedPhase: Boolean = false,
-    val showDrsOverlay: Boolean = false
+    val showDrsOverlay: Boolean = false,
+    val careerPlayerId: String? = null,
+    val careerPlayerName: String? = null,
+    val careerControlMode: CareerControlMode = CareerControlMode.FULL_TEAM,
+    val autoJumpLandscapeSignal: Long = 0L
 )
 
 class MatchSimViewModel : ViewModel() {
@@ -63,7 +70,10 @@ class MatchSimViewModel : ViewModel() {
         stage: com.example.data.model.MatchStage = com.example.data.model.MatchStage.LEAGUE,
         format: com.example.data.model.MatchFormat = com.example.data.model.MatchFormat.T20I,
         opponentRatingOffset: Int = 0,
-        userTeamId: String? = null
+        userTeamId: String? = null,
+        careerPlayerId: String? = null,
+        careerPlayerName: String? = null,
+        careerControlMode: CareerControlMode = if (careerPlayerId != null) CareerControlMode.PLAYER_ONLY else CareerControlMode.FULL_TEAM
     ) {
         stopAutoPlay()
         stopSkippedPhaseAutoSim()
@@ -75,15 +85,23 @@ class MatchSimViewModel : ViewModel() {
             teamBRatingOffset = opponentRatingOffset
         )
         val resolvedUserTeamId = InteractivePhaseResolver.resolveUserTeamId(initial, userTeamId)
-        val previousFilter = _uiState.value.playFilter
+        val resolvedFilter = if (careerPlayerId != null && careerControlMode == CareerControlMode.PLAYER_ONLY) {
+            InteractivePlayFilter.BOTH
+        } else {
+            _uiState.value.playFilter
+        }
         _uiState.value = MatchSimUiState(
             match = initial,
             autoPlaying = false,
             speed = PlaybackSpeed.NORMAL,
             userTeamId = resolvedUserTeamId,
-            playFilter = previousFilter,
+            playFilter = resolvedFilter,
             showPlayModeSetup = true,
-            autoSimmingSkippedPhase = false
+            autoSimmingSkippedPhase = false,
+            careerPlayerId = careerPlayerId,
+            careerPlayerName = careerPlayerName,
+            careerControlMode = if (careerPlayerId != null) careerControlMode else CareerControlMode.FULL_TEAM,
+            autoJumpLandscapeSignal = 0L
         )
     }
 
@@ -92,9 +110,21 @@ class MatchSimViewModel : ViewModel() {
         pitchType: PitchType? = null,
         weatherCondition: WeatherCondition? = null,
         dewFactor2ndInnings: Boolean? = null,
+        careerControlMode: CareerControlMode? = null,
         onFinished: ((LiveMatchState) -> Unit)? = null
     ) {
+        var shouldJumpLandscapeNow = false
         _uiState.update { state ->
+            val resolvedControlMode = if (state.careerPlayerId != null) {
+                careerControlMode ?: state.careerControlMode
+            } else {
+                CareerControlMode.FULL_TEAM
+            }
+            val effectiveFilter = if (state.careerPlayerId != null && resolvedControlMode == CareerControlMode.PLAYER_ONLY) {
+                InteractivePlayFilter.BOTH
+            } else {
+                filter
+            }
             val updatedMatch = state.match?.let { m ->
                 if (pitchType != null || weatherCondition != null || dewFactor2ndInnings != null) {
                     MatchSimulationEngine.updatePreMatchConditions(
@@ -105,11 +135,25 @@ class MatchSimViewModel : ViewModel() {
                     )
                 } else m
             }
+            if (updatedMatch != null &&
+                state.careerPlayerId != null &&
+                resolvedControlMode == CareerControlMode.PLAYER_ONLY &&
+                InteractivePhaseResolver.isCareerPlayerActiveTurn(updatedMatch, state.userTeamId, state.careerPlayerId)
+            ) {
+                shouldJumpLandscapeNow = true
+            }
+            val modeLabel = if (state.careerPlayerId != null) {
+                "${resolvedControlMode.shortLabel} (${state.careerPlayerName ?: "My Pro"})"
+            } else {
+                effectiveFilter.label
+            }
             state.copy(
                 match = updatedMatch,
-                playFilter = filter,
+                playFilter = effectiveFilter,
+                careerControlMode = resolvedControlMode,
                 showPlayModeSetup = false,
-                statusNotice = "Mode: ${filter.label} • ${updatedMatch?.pitchType?.shortLabel ?: ""}"
+                autoJumpLandscapeSignal = if (shouldJumpLandscapeNow) state.autoJumpLandscapeSignal + 1L else state.autoJumpLandscapeSignal,
+                statusNotice = "Mode: $modeLabel • ${updatedMatch?.pitchType?.shortLabel ?: ""}"
             )
         }
         triggerSkippedPhaseAutoSimIfNeeded(onFinished)
@@ -121,15 +165,27 @@ class MatchSimViewModel : ViewModel() {
     ) {
         stopAutoPlay()
         stopSkippedPhaseAutoSim()
+        val resolvedControlMode = if (!snapshot.careerPlayerId.isNullOrBlank()) {
+            snapshot.careerControlMode
+        } else {
+            CareerControlMode.FULL_TEAM
+        }
+        val jumpNow = !snapshot.careerPlayerId.isNullOrBlank() &&
+            resolvedControlMode == CareerControlMode.PLAYER_ONLY &&
+            InteractivePhaseResolver.isCareerPlayerActiveTurn(snapshot.match, snapshot.userTeamId, snapshot.careerPlayerId)
         _uiState.value = MatchSimUiState(
             match = snapshot.match,
             autoPlaying = false,
             speed = PlaybackSpeed.NORMAL,
             userTeamId = snapshot.userTeamId,
-            playFilter = snapshot.playFilter,
+            playFilter = if (resolvedControlMode == CareerControlMode.PLAYER_ONLY) InteractivePlayFilter.BOTH else snapshot.playFilter,
             showPlayModeSetup = false,
             autoSimmingSkippedPhase = false,
             showDrsOverlay = false,
+            careerPlayerId = snapshot.careerPlayerId,
+            careerPlayerName = snapshot.careerPlayerName,
+            careerControlMode = resolvedControlMode,
+            autoJumpLandscapeSignal = if (jumpNow) 1L else 0L,
             statusNotice = "Resumed saved match (${snapshot.headline})"
         )
         triggerSkippedPhaseAutoSimIfNeeded(onFinished)
@@ -181,7 +237,12 @@ class MatchSimViewModel : ViewModel() {
         filter: InteractivePlayFilter,
         onFinished: ((LiveMatchState) -> Unit)? = null
     ) {
-        if (_uiState.value.playFilter == filter && !_uiState.value.showPlayModeSetup) return
+        val state = _uiState.value
+        if (state.careerControlMode == CareerControlMode.PLAYER_ONLY && !state.careerPlayerId.isNullOrBlank()) {
+            // Strict Player-Only mode stays on BOTH so user always plays their player's batting & bowling turns
+            return
+        }
+        if (state.playFilter == filter && !state.showPlayModeSetup) return
         stopAutoPlay()
         stopSkippedPhaseAutoSim()
         _uiState.update {
@@ -192,6 +253,91 @@ class MatchSimViewModel : ViewModel() {
             )
         }
         triggerSkippedPhaseAutoSimIfNeeded(onFinished)
+    }
+
+    fun setCareerControlMode(
+        mode: CareerControlMode,
+        onFinished: ((LiveMatchState) -> Unit)? = null
+    ) {
+        val state = _uiState.value
+        if (state.careerPlayerId.isNullOrBlank()) return
+        if (state.careerControlMode == mode && !state.showPlayModeSetup) return
+        stopAutoPlay()
+        stopSkippedPhaseAutoSim()
+        _uiState.update {
+            it.copy(
+                careerControlMode = mode,
+                playFilter = if (mode == CareerControlMode.PLAYER_ONLY) InteractivePlayFilter.BOTH else it.playFilter,
+                showPlayModeSetup = false,
+                statusNotice = if (mode == CareerControlMode.PLAYER_ONLY) {
+                    "★ Strict Player-Only active for ${it.careerPlayerName ?: "My Pro"}"
+                } else {
+                    "Switched to Full-Team Gameplay"
+                }
+            )
+        }
+        triggerSkippedPhaseAutoSimIfNeeded(onFinished)
+    }
+
+    /**
+     * Immediately fast-forwards past all non-created-player deliveries/overs and lands
+     * on the exact ball where the created career player faces a delivery or bowls an over.
+     */
+    fun skipToCareerPlayerTurn(onFinished: ((LiveMatchState) -> Unit)? = null) {
+        val state = _uiState.value
+        val startMatch = state.match ?: return
+        if (startMatch.finished) return
+        val careerId = state.careerPlayerId
+        if (careerId.isNullOrBlank() || state.careerControlMode != CareerControlMode.PLAYER_ONLY) {
+            simInnings(onFinished)
+            return
+        }
+        stopAutoPlay()
+        stopSkippedPhaseAutoSim()
+        viewModelScope.launch {
+            val advanced = withContext(Dispatchers.Default) {
+                var cur = startMatch
+                var guard = 0
+                while (
+                    !cur.finished &&
+                    guard < 4000 &&
+                    InteractivePhaseResolver.shouldAutoSimAnyReason(
+                        match = cur,
+                        userTeamId = state.userTeamId,
+                        filter = state.playFilter,
+                        careerPlayerId = careerId,
+                        controlMode = state.careerControlMode
+                    )
+                ) {
+                    cur = stepAutoSimForPlayerOnly(cur, state.userTeamId, careerId)
+                    guard++
+                }
+                cur
+            }
+            val snap = buildSnapshot(advanced, null)
+            val isActiveTurn = !advanced.finished && InteractivePhaseResolver.isCareerPlayerActiveTurn(
+                match = advanced,
+                userTeamId = state.userTeamId,
+                careerPlayerId = careerId
+            )
+            val handoffMsg = buildPlayerTurnHandoffMessage(
+                match = advanced,
+                userTeamId = state.userTeamId,
+                careerPlayerName = state.careerPlayerName
+            )
+            _uiState.update {
+                it.copy(
+                    match = advanced,
+                    lastActionSnapshot = snap ?: it.lastActionSnapshot,
+                    autoSimmingSkippedPhase = false,
+                    autoJumpLandscapeSignal = if (isActiveTurn) it.autoJumpLandscapeSignal + 1L else it.autoJumpLandscapeSignal,
+                    statusNotice = if (advanced.finished) advanced.resultSummary else handoffMsg
+                )
+            }
+            if (advanced.finished) {
+                onFinished?.invoke(advanced)
+            }
+        }
     }
 
     fun applyImpactSub(teamId: String, benchPlayerId: String, outPlayerId: String) {
@@ -253,6 +399,13 @@ class MatchSimViewModel : ViewModel() {
         if (state.autoSimmingSkippedPhase) return
         val current = state.match ?: return
         if (current.finished) return
+        // Strict Player-Only guard: never allow interactive play for teammates
+        if (state.careerControlMode == CareerControlMode.PLAYER_ONLY && !state.careerPlayerId.isNullOrBlank()) {
+            if (!InteractivePhaseResolver.isCareerPlayerActiveTurn(current, state.userTeamId, state.careerPlayerId)) {
+                triggerSkippedPhaseAutoSimIfNeeded(onFinished)
+                return
+            }
+        }
         val next = MatchSimulationEngine.simulateNextBall(current, interactiveInput = input)
         val snap = buildSnapshot(next, input)
         _uiState.update { it.copy(match = next, lastActionSnapshot = snap) }
@@ -401,11 +554,58 @@ class MatchSimViewModel : ViewModel() {
         }
     }
 
+    private fun stepAutoSimForPlayerOnly(
+        match: LiveMatchState,
+        userTeamId: String,
+        careerPlayerId: String
+    ): LiveMatchState {
+        if (match.isSuperOverActive) {
+            return MatchSimulationEngine.simulateNextBall(match)
+        }
+        val userBatting = InteractivePhaseResolver.isUserTeamBatting(match, userTeamId)
+        return if (userBatting) {
+            // If career player is already dismissed in this innings, fast-sim full overs cleanly
+            val alreadyOut = match.activeInnings.battingCard
+                .firstOrNull { it.playerId == careerPlayerId }
+                ?.out == true
+            if (alreadyOut) {
+                MatchSimulationEngine.simulateNextOver(match)
+            } else {
+                // Step 1 ball at a time before coming in or at non-striker end so we pause on their exact first ball
+                MatchSimulationEngine.simulateNextBall(match)
+            }
+        } else {
+            // Opponent batting & teammate bowling: step 1 full over at start-of-over, else finish current over ball-by-ball
+            if (match.activeInnings.legalBalls % 6 == 0) {
+                MatchSimulationEngine.simulateNextOver(match)
+            } else {
+                MatchSimulationEngine.simulateNextBall(match)
+            }
+        }
+    }
+
+    private fun buildPlayerTurnHandoffMessage(
+        match: LiveMatchState,
+        userTeamId: String,
+        careerPlayerName: String?
+    ): String {
+        val proLabel = careerPlayerName?.takeIf { it.isNotBlank() } ?: "Your Pro"
+        val userBat = InteractivePhaseResolver.isUserTeamBatting(match, userTeamId)
+        return if (userBat) {
+            val tgtText = match.target?.let { " • Target $it" }.orEmpty()
+            "🏏 $proLabel's turn to BAT$tgtText!"
+        } else {
+            val overNum = (match.activeInnings.legalBalls / 6) + 1
+            "🎯 $proLabel's turn to BOWL (Over $overNum)!"
+        }
+    }
+
     /**
-     * Automatically fast-simulates any innings that falls outside the user's selected
-     * [InteractivePlayFilter] (e.g., opponent's batting innings in BATTING_ONLY mode,
-     * or user's batting innings in BOWLING_ONLY mode) in lightweight 1-over pulses
-     * so mobile browsers stay smooth while letting the user watch or instant-skip.
+     * Automatically fast-simulates any innings or deliveries outside the user's control:
+     * - In Strict Player-Only Career Mode: fast-simulates all deliveries/overs whenever the
+     *   created player is not on strike batting and not bowling, then pauses and signals
+     *   interactive Landscape gameplay the exact moment their turn begins.
+     * - In Team Bat-Only / Bowl-Only modes: fast-simulates the skipped innings.
      */
     private fun triggerSkippedPhaseAutoSimIfNeeded(
         onFinished: ((LiveMatchState) -> Unit)? = null
@@ -416,10 +616,12 @@ class MatchSimViewModel : ViewModel() {
             stopSkippedPhaseAutoSim()
             return
         }
-        val shouldAutoSim = InteractivePhaseResolver.shouldAutoSimCurrentPhase(
+        val shouldAutoSim = InteractivePhaseResolver.shouldAutoSimAnyReason(
             match = currentMatch,
             userTeamId = currentState.userTeamId,
-            filter = currentState.playFilter
+            filter = currentState.playFilter,
+            careerPlayerId = currentState.careerPlayerId,
+            controlMode = currentState.careerControlMode
         )
         if (!shouldAutoSim) {
             stopSkippedPhaseAutoSim()
@@ -438,28 +640,43 @@ class MatchSimViewModel : ViewModel() {
                     if (m?.finished == true) onFinished?.invoke(m)
                     break
                 }
-                val stillSkipped = InteractivePhaseResolver.shouldAutoSimCurrentPhase(
+                val stillSkipped = InteractivePhaseResolver.shouldAutoSimAnyReason(
                     match = m,
                     userTeamId = st.userTeamId,
-                    filter = st.playFilter
+                    filter = st.playFilter,
+                    careerPlayerId = st.careerPlayerId,
+                    controlMode = st.careerControlMode
                 )
                 if (!stillSkipped) {
-                    val userBat = InteractivePhaseResolver.isUserTeamBatting(m, st.userTeamId)
-                    val handoffMsg = if (userBat) {
-                        val tgtText = m.target?.let { " • Target $it" }.orEmpty()
-                        "🏏 Your turn to BAT$tgtText!"
+                    val isPlayerOnly = st.careerControlMode == CareerControlMode.PLAYER_ONLY &&
+                        !st.careerPlayerId.isNullOrBlank()
+                    val handoffMsg = if (isPlayerOnly) {
+                        buildPlayerTurnHandoffMessage(m, st.userTeamId, st.careerPlayerName)
                     } else {
-                        val tgtText = m.target?.let { " • Defend ${it - 1}" }.orEmpty()
-                        "🎯 Your turn to BOWL$tgtText!"
+                        val userBat = InteractivePhaseResolver.isUserTeamBatting(m, st.userTeamId)
+                        if (userBat) {
+                            val tgtText = m.target?.let { " • Target $it" }.orEmpty()
+                            "🏏 Your turn to BAT$tgtText!"
+                        } else {
+                            val tgtText = m.target?.let { " • Defend ${it - 1}" }.orEmpty()
+                            "🎯 Your turn to BOWL$tgtText!"
+                        }
                     }
                     _uiState.update {
-                        it.copy(autoSimmingSkippedPhase = false, statusNotice = handoffMsg)
+                        it.copy(
+                            autoSimmingSkippedPhase = false,
+                            autoJumpLandscapeSignal = if (isPlayerOnly) it.autoJumpLandscapeSignal + 1L else it.autoJumpLandscapeSignal,
+                            statusNotice = handoffMsg
+                        )
                     }
                     break
                 }
 
-                // Step 1 over at a time in regulation (or 1 ball in Super Over) to keep UI lightweight & responsive
-                val updated = if (m.isSuperOverActive) {
+                val isPlayerOnly = st.careerControlMode == CareerControlMode.PLAYER_ONLY &&
+                    !st.careerPlayerId.isNullOrBlank()
+                val updated = if (isPlayerOnly) {
+                    stepAutoSimForPlayerOnly(m, st.userTeamId, st.careerPlayerId!!)
+                } else if (m.isSuperOverActive) {
                     MatchSimulationEngine.simulateNextBall(m)
                 } else {
                     MatchSimulationEngine.simulateNextOver(m)
@@ -476,7 +693,16 @@ class MatchSimViewModel : ViewModel() {
                     onFinished?.invoke(updated)
                     break
                 }
-                delay(220L)
+                val delayMs = when {
+                    !isPlayerOnly -> 200L
+                    InteractivePhaseResolver.isUserTeamBatting(updated, st.userTeamId) -> {
+                        val outNow = updated.activeInnings.battingCard
+                            .firstOrNull { it.playerId == st.careerPlayerId }?.out == true
+                        if (outNow) 130L else 70L
+                    }
+                    else -> 130L
+                }
+                delay(delayMs)
             }
         }
     }

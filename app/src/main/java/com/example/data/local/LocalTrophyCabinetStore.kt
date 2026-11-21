@@ -87,6 +87,67 @@ class LocalTrophyCabinetStore(context: Context) {
         }.getOrDefault(emptyList())
     }
 
+    fun exportCabinetJson(): JSONObject {
+        val data = loadCabinet()
+        val arr = JSONArray()
+        data.trophies.forEach { t ->
+            arr.put(
+                JSONObject().apply {
+                    put("id", t.id)
+                    put("title", t.title)
+                    put("competitionType", t.competitionType)
+                    put("championTeamName", t.championTeamName)
+                    put("runnerUpTeamName", t.runnerUpTeamName)
+                    put("userWon", t.userWon)
+                    put("summary", t.summary)
+                    put("orangeCapWinner", t.orangeCapWinner)
+                    put("purpleCapWinner", t.purpleCapWinner)
+                    put("mvpWinner", t.mvpWinner)
+                    put("timestampMs", t.timestampMs)
+                }
+            )
+        }
+        return JSONObject().apply {
+            put("finalsPlayed", data.finalsPlayed)
+            put("championshipsWon", data.championshipsWon)
+            put("trophies", arr)
+        }
+    }
+
+    fun importCabinetJson(obj: JSONObject?): TrophyCabinetData {
+        if (obj == null) return loadCabinet()
+        return runCatching {
+            val arr = obj.optJSONArray("trophies") ?: JSONArray()
+            val list = buildList {
+                for (i in 0 until arr.length()) {
+                    val item = arr.optJSONObject(i) ?: continue
+                    add(
+                        TrophyCabinetRecord(
+                            id = item.optString("id"),
+                            title = item.optString("title"),
+                            competitionType = item.optString("competitionType", "IPL"),
+                            championTeamName = item.optString("championTeamName"),
+                            runnerUpTeamName = item.optString("runnerUpTeamName"),
+                            userWon = item.optBoolean("userWon", false),
+                            summary = item.optString("summary"),
+                            orangeCapWinner = item.optString("orangeCapWinner"),
+                            purpleCapWinner = item.optString("purpleCapWinner"),
+                            mvpWinner = item.optString("mvpWinner"),
+                            timestampMs = item.optLong("timestampMs", 0L)
+                        )
+                    )
+                }
+            }.sortedByDescending { it.timestampMs }
+            val restored = TrophyCabinetData(
+                trophies = list,
+                finalsPlayed = obj.optInt("finalsPlayed", list.size),
+                championshipsWon = obj.optInt("championshipsWon", list.count { it.userWon })
+            )
+            saveCabinet(restored)
+            restored
+        }.getOrDefault(loadCabinet())
+    }
+
     private fun saveCabinet(data: TrophyCabinetData) {
         runCatching {
             val arr = JSONArray()

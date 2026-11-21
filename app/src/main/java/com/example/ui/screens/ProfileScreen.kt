@@ -1,6 +1,8 @@
 package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -24,11 +26,14 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.SportsCricket
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
@@ -51,6 +56,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -76,6 +82,7 @@ import com.example.ui.theme.NavyOutline
 import com.example.ui.theme.NavySurface
 import com.example.ui.theme.NavySurfaceHigh
 import com.example.ui.theme.OnEmeraldDark
+import com.example.ui.theme.OnGoldDark
 import com.example.ui.theme.TurfEmerald
 import com.example.ui.theme.WicketCrimson
 
@@ -90,16 +97,55 @@ fun ProfileScreen(
     onCopyBackupCode: () -> Unit,
     onConnectCloudSync: () -> Unit,
     onSignOutToWelcome: () -> Unit,
+    backupSummaryLine: String = "",
+    onExportBackupJson: () -> String = { "" },
+    onImportBackupPayload: (rawPayload: String) -> Unit = {},
+    onExportFileResult: (message: String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     BackHandler(onBack = onBack)
     val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
 
     var usernameDraft by rememberSaveable(profile.accountId, profile.username) { mutableStateOf(profile.username) }
     var favoriteTeamDraft by rememberSaveable(profile.accountId, profile.favoriteTeamName) { mutableStateOf(profile.favoriteTeamName) }
     var selectedAvatarId by rememberSaveable(profile.accountId, profile.avatarId) { mutableStateOf(profile.avatarId) }
     var newPasswordDraft by rememberSaveable(profile.accountId) { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
+    var importCodeDraft by rememberSaveable { mutableStateOf("") }
+
+    val createJsonBackupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        runCatching {
+            val payload = onExportBackupJson()
+            require(payload.isNotBlank()) { "Backup data was empty." }
+            context.contentResolver.openOutputStream(uri)?.use { out ->
+                out.write(payload.toByteArray(Charsets.UTF_8))
+                out.flush()
+            } ?: throw IllegalStateException("Could not open destination file.")
+        }.fold(
+            onSuccess = { onExportFileResult("✓ CricBid save exported to .JSON file!") },
+            onFailure = { err -> onExportFileResult("Could not export JSON: ${err.message ?: "unknown error"}") }
+        )
+    }
+
+    val openJsonBackupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                val bytes = stream.readBytes()
+                require(bytes.size <= 512_000) { "Backup file is too large (max 512 KB)." }
+                String(bytes, Charsets.UTF_8)
+            } ?: throw IllegalStateException("Could not read selected file.")
+        }.fold(
+            onSuccess = { payload -> onImportBackupPayload(payload) },
+            onFailure = { err -> onExportFileResult("Could not read JSON: ${err.message ?: "unknown error"}") }
+        )
+    }
 
     val selectedAvatarSpec = remember(selectedAvatarId) { IndianPlayerAvatars.byId(selectedAvatarId) }
     val avatarRows = remember { IndianPlayerAvatars.all.chunked(4) }
@@ -426,12 +472,12 @@ fun ProfileScreen(
                     }
                 }
 
-                // Reinstall-Safe Backup Code & Cloud Multiplayer Card
+                // Export & Import Full Save Data (Account + Career + Hall of Fame + Trophies)
                 item {
                     Surface(
                         color = NavySurface,
                         shape = RoundedCornerShape(18.dp),
-                        border = BorderStroke(1.dp, BoundarySky.copy(alpha = 0.45f)),
+                        border = BorderStroke(1.dp, BoundarySky.copy(alpha = 0.5f)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(
@@ -442,7 +488,7 @@ fun ProfileScreen(
                                 Icon(Icons.Filled.Shield, contentDescription = null, tint = BoundarySky, modifier = Modifier.size(20.dp))
                                 Spacer(Modifier.width(8.dp))
                                 Text(
-                                    text = "REINSTALL-SAFE ACCOUNT BACKUP",
+                                    text = "EXPORT & IMPORT SAVE DATA",
                                     style = MaterialTheme.typography.titleSmall.copy(
                                         fontFamily = DisplayFontFamily,
                                         letterSpacing = 0.8.sp,
@@ -451,17 +497,35 @@ fun ProfileScreen(
                                 )
                             }
                             Text(
-                                text = "Your profile & salted password hash auto-backup with Android Auto Backup. Copy your portable CB1 Backup Code to restore your profile on any device or after a clean reinstall.",
+                                text = "Back up your Account, Stats, Player Career Mode, Hall of Fame & Trophies as a copyable code or local .JSON file before uninstalling, and restore anytime.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = BroadcastSilver
                             )
+
+                            if (backupSummaryLine.isNotBlank()) {
+                                Surface(
+                                    color = NavySurfaceHigh,
+                                    shape = RoundedCornerShape(10.dp),
+                                    border = BorderStroke(1.dp, TurfEmerald.copy(alpha = 0.4f)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        text = "Included: $backupSummaryLine",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            color = TurfEmerald,
+                                            fontWeight = FontWeight.Bold
+                                        ),
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                                    )
+                                }
+                            }
 
                             OutlinedButton(
                                 onClick = {
                                     clipboard.setText(AnnotatedString(backupCode))
                                     onCopyBackupCode()
                                 },
-                                border = BorderStroke(1.dp, AuctionGold.copy(alpha = 0.7f)),
+                                border = BorderStroke(1.dp, AuctionGold.copy(alpha = 0.75f)),
                                 shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -471,15 +535,117 @@ fun ProfileScreen(
                                 Icon(Icons.Filled.ContentCopy, contentDescription = null, tint = AuctionGold, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.width(8.dp))
                                 Text(
-                                    text = "Copy Account Backup Code (CB1-...)",
-                                    style = MaterialTheme.typography.labelLarge.copy(color = AuctionGold, fontWeight = FontWeight.Bold)
+                                    text = "Export Save / Copy Backup Code (CB2-...)",
+                                    style = MaterialTheme.typography.labelLarge.copy(color = AuctionGold, fontWeight = FontWeight.Bold),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    val safeName = profile.username
+                                        .replace(Regex("[^A-Za-z0-9_-]"), "_")
+                                        .ifBlank { "manager" }
+                                    createJsonBackupLauncher.launch("cricbid-save-$safeName.json")
+                                },
+                                border = BorderStroke(1.dp, TurfEmerald.copy(alpha = 0.7f)),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp)
+                                    .testTag("export_backup_json_button")
+                            ) {
+                                Icon(Icons.Filled.Download, contentDescription = null, tint = TurfEmerald, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = "Export Save to .JSON File",
+                                    style = MaterialTheme.typography.labelLarge.copy(color = TurfEmerald, fontWeight = FontWeight.Bold)
+                                )
+                            }
+
+                            Spacer(Modifier.height(2.dp))
+
+                            Text(
+                                text = "IMPORT SAVE / RESTORE CODE",
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontFamily = DisplayFontFamily,
+                                    letterSpacing = 0.7.sp,
+                                    color = BoundarySky
+                                )
+                            )
+
+                            OutlinedTextField(
+                                value = importCodeDraft,
+                                onValueChange = { importCodeDraft = it },
+                                label = { Text("Paste Backup Code (CB2-... / CB1-...) or JSON") },
+                                singleLine = false,
+                                maxLines = 3,
+                                colors = cricBidTextFieldColors(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("profile_import_code_input")
+                            )
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = {
+                                        val payload = importCodeDraft.trim()
+                                        if (payload.isNotBlank()) {
+                                            onImportBackupPayload(payload)
+                                            importCodeDraft = ""
+                                        }
+                                    },
+                                    enabled = importCodeDraft.trim().isNotBlank(),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = AuctionGold,
+                                        contentColor = OnGoldDark
+                                    ),
+                                    shape = RoundedCornerShape(12.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(48.dp)
+                                        .testTag("profile_import_code_button")
+                                ) {
+                                    Icon(Icons.Filled.Restore, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = "Restore Code",
+                                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                        maxLines = 1
+                                    )
+                                }
+
+                                OutlinedButton(
+                                    onClick = {
+                                        openJsonBackupLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                                    },
+                                    border = BorderStroke(1.dp, BoundarySky.copy(alpha = 0.7f)),
+                                    shape = RoundedCornerShape(12.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(48.dp)
+                                        .testTag("profile_import_json_button")
+                                ) {
+                                    Icon(Icons.Filled.UploadFile, contentDescription = null, tint = BoundarySky, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = "Import .JSON",
+                                        style = MaterialTheme.typography.labelLarge.copy(color = BoundarySky, fontWeight = FontWeight.Bold),
+                                        maxLines = 1
+                                    )
+                                }
                             }
 
                             if (!isCloudConnected) {
                                 OutlinedButton(
                                     onClick = onConnectCloudSync,
-                                    border = BorderStroke(1.dp, BoundarySky.copy(alpha = 0.6f)),
+                                    border = BorderStroke(1.dp, NavyOutline),
                                     shape = RoundedCornerShape(12.dp),
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -488,7 +654,7 @@ fun ProfileScreen(
                                 ) {
                                     Text(
                                         text = "Optional: Link Google Account for Profile Backup",
-                                        style = MaterialTheme.typography.labelMedium.copy(color = BoundarySky, fontWeight = FontWeight.Bold)
+                                        style = MaterialTheme.typography.labelMedium.copy(color = BroadcastSilver, fontWeight = FontWeight.Bold)
                                     )
                                 }
                             } else {

@@ -90,14 +90,22 @@ class LocalProfileStore(context: Context) {
 
     fun continueAsGuest(username: String, avatarId: String = IndianPlayerAvatars.DEFAULT_ID): AccountProfile {
         val cleaned = username.trim().take(28).ifBlank { "Manager" }
-        val existing = loadActiveProfile()
-        val profile = if (existing != null && existing.isGuest) {
-            existing.copy(username = cleaned, avatarId = avatarId.ifBlank { existing.avatarId })
-        } else {
-            AccountProfile(
+        val norm = normalizeUsername(cleaned)
+        val existingActive = loadActiveProfile()
+        val existingMatching = loadAllAccounts().firstOrNull { normalizeUsername(it.username) == norm }
+        val profile = when {
+            existingMatching != null && existingMatching.isGuest -> existingMatching.copy(
+                username = cleaned,
+                avatarId = avatarId.ifBlank { existingMatching.avatarId }
+            )
+            existingActive != null && existingActive.isGuest -> existingActive.copy(
+                username = cleaned,
+                avatarId = avatarId.ifBlank { existingActive.avatarId }
+            )
+            else -> AccountProfile(
                 accountId = "guest_${UUID.randomUUID().toString().replace("-", "").take(12)}",
                 username = cleaned,
-                avatarId = avatarId,
+                avatarId = IndianPlayerAvatars.byId(avatarId).id,
                 favoriteTeamName = "Royal Strikers",
                 isGuest = true
             )
@@ -121,8 +129,16 @@ class LocalProfileStore(context: Context) {
         }
         val accounts = loadAllAccounts()
         val norm = normalizeUsername(cleanedUser)
-        if (accounts.any { it.hasPassword && normalizeUsername(it.username) == norm }) {
-            return Result.failure(IllegalStateException("Username '$cleanedUser' already exists — switch to Sign In"))
+        val existing = accounts.firstOrNull { it.hasPassword && normalizeUsername(it.username) == norm }
+        if (existing != null) {
+            // If the user re-enters the exact same username & password, sign them in cleanly instead of blocking
+            val candidateHash = hashPassword(password, existing.passwordSalt)
+            return if (constantTimeEquals(candidateHash, existing.passwordHash)) {
+                saveAccountToVault(existing, setActive = true)
+                Result.success(existing)
+            } else {
+                Result.failure(IllegalStateException("Username '$cleanedUser' already exists on this device — use Sign In with your password"))
+            }
         }
 
         val salt = generateSalt()
@@ -144,21 +160,61 @@ class LocalProfileStore(context: Context) {
         return Result.success(created)
     }
 
-    fun signInWithPassword(username: String, password: String): Result<AccountProfile> {
-        val cleanedUser = username.trim()
-        if (cleanedUser.length < 2 || password.isEmpty()) {
-            return Result.failure(IllegalArgumentException("Enter both Username and Password"))
+    /**
+     * Signs into an existing local account OR cleanly creates it on a fresh install
+     * so entering a username never gets stuck with a "not found" error after reinstalling.
+     */
+    fun signInWithPassword(
+        username: String,
+        password: String,
+        avatarId: String = IndianPlayerAvatars.DEFAULT_ID
+    ): Result<AccountProfile> {
+        val cleanedUser = username.trim().take(28)
+        if (cleanedUser.length < 2) {
+            return Result.failure(IllegalArgumentException("Username must be at least 2 characters"))
+        }
+        if (password.length < 4) {
+            return Result.failure(IllegalArgumentException("Password must be at least 4 characters"))
         }
         val norm = normalizeUsername(cleanedUser)
-        val match = loadAllAccounts().firstOrNull { it.hasPassword && normalizeUsername(it.username) == norm }
-            ?: return Result.failure(IllegalStateException("No saved account found for '$cleanedUser'. Create Account or Restore Backup Code."))
-
-        val candidateHash = hashPassword(password, match.passwordSalt)
-        if (!constantTimeEquals(candidateHash, match.passwordHash)) {
-            return Result.failure(IllegalArgumentException("Incorrect password for '$cleanedUser'"))
+        val allAccounts = loadAllAccounts()
+        val existingProtected = allAccounts.firstOrNull { it.hasPassword && normalizeUsername(it.username) == norm }
+        if (existingProtected != null) {
+            val candidateHash = hashPassword(password, existingProtected.passwordSalt)
+            if (!constantTimeEquals(candidateHash, existingProtected.passwordHash)) {
+                return Result.failure(IllegalArgumentException("Incorrect password for '$cleanedUser'"))
+            }
+            saveAccountToVault(existingProtected, setActive = true)
+            return Result.success(existingProtected)
         }
-        saveAccountToVault(match, setActive = true)
-        return Result.success(match)
+
+        // If a guest profile with this username exists locally, upgrade & preserve its stats
+        val existingGuest = allAccounts.firstOrNull { normalizeUsername(it.username) == norm }
+        val salt = generateSalt()
+        val hash = hashPassword(password, salt)
+        val freshOrUpgraded = if (existingGuest != null) {
+            existingGuest.copy(
+                username = cleanedUser,
+                passwordHash = hash,
+                passwordSalt = salt,
+                isGuest = false
+            )
+        } else {
+            AccountProfile(
+                accountId = "acct_${sha256Hex(norm).take(14)}",
+                username = cleanedUser,
+                passwordHash = hash,
+                passwordSalt = salt,
+                avatarId = IndianPlayerAvatars.byId(avatarId).id,
+                favoriteTeamName = "Royal Strikers",
+                matchesPlayed = 0,
+                matchesWon = 0,
+                trophiesWon = 0,
+                isGuest = false
+            )
+        }
+        saveAccountToVault(freshOrUpgraded, setActive = true)
+        return Result.success(freshOrUpgraded)
     }
 
     fun updateActiveProfile(
@@ -219,10 +275,26 @@ class LocalProfileStore(context: Context) {
         return updated
     }
 
+    fun exportProfileJson(profile: AccountProfile): JSONObject = serializeAccount(profile)
+
+    fun importProfileJson(
+        obj: JSONObject,
+        passwordForVerification: String = ""
+    ): Result<AccountProfile> = runCatching {
+        val restored = parseAccount(obj)
+            ?: throw IllegalArgumentException("Invalid account data in backup")
+        if (restored.hasPassword && passwordForVerification.isNotBlank()) {
+            val candidateHash = hashPassword(passwordForVerification, restored.passwordSalt)
+            if (!constantTimeEquals(candidateHash, restored.passwordHash)) {
+                throw IllegalArgumentException("Password does not match this backup")
+            }
+        }
+        saveAccountToVault(restored, setActive = true)
+        restored
+    }
+
     /**
-     * Generates a compact, portable Account Backup Code (CB1-...) so players can restore
-     * their exact account (username, salted password hash, avatar, stats) after reinstalling
-     * or switching devices.
+     * Generates a compact, portable Account Backup Code (CB1-...) for backward compatibility.
      */
     fun exportBackupCode(profile: AccountProfile): String {
         val obj = serializeAccount(profile)
@@ -233,28 +305,16 @@ class LocalProfileStore(context: Context) {
         return "CB1-$encoded"
     }
 
-    fun importBackupCode(rawCode: String, passwordForVerification: String): Result<AccountProfile> {
+    fun importBackupCode(rawCode: String, passwordForVerification: String = ""): Result<AccountProfile> {
         val cleaned = rawCode.trim()
         if (!cleaned.startsWith("CB1-")) {
-            return Result.failure(IllegalArgumentException("Backup code must start with CB1-"))
+            return Result.failure(IllegalArgumentException("Backup code must start with CB1- or CB2-"))
         }
         return runCatching {
             val payload = cleaned.removePrefix("CB1-")
             val jsonBytes = Base64.decode(payload, Base64.URL_SAFE or Base64.NO_WRAP)
             val obj = JSONObject(String(jsonBytes, Charsets.UTF_8))
-            val restored = parseAccount(obj)
-                ?: throw IllegalArgumentException("Corrupted backup code")
-            if (restored.hasPassword) {
-                if (passwordForVerification.isEmpty()) {
-                    throw IllegalArgumentException("Enter your account password to unlock this backup")
-                }
-                val candidateHash = hashPassword(passwordForVerification, restored.passwordSalt)
-                if (!constantTimeEquals(candidateHash, restored.passwordHash)) {
-                    throw IllegalArgumentException("Password does not match this backup code")
-                }
-            }
-            saveAccountToVault(restored, setActive = true)
-            restored
+            importProfileJson(obj, passwordForVerification).getOrThrow()
         }
     }
 

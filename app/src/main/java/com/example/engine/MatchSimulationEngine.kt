@@ -685,7 +685,12 @@ object MatchSimulationEngine {
                     PlayerRole.ALL_ROUNDER -> 12
                     else -> 0
                 }
-                it.bowlingRating + roleBonus
+                // Guarantee user-created Career Bowlers & All-Rounders always get bowling turns from Match 1
+                val careerBowlingPriority = if (
+                    it.id.startsWith("hof_") &&
+                    (it.role == PlayerRole.SEAMER || it.role == PlayerRole.SPINNER || it.role == PlayerRole.ALL_ROUNDER)
+                ) 60 else 0
+                it.bowlingRating + roleBonus + careerBowlingPriority
             }
             .take(count.coerceAtMost(bowlingXi.size))
 

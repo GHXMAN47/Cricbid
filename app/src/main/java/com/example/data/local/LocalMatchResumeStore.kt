@@ -13,6 +13,7 @@ import com.example.engine.BallOutcomeType
 import com.example.engine.BatterScoreEntry
 import com.example.engine.BowlerScoreEntry
 import com.example.engine.FallOfWicket
+import com.example.engine.CareerControlMode
 import com.example.engine.FieldPreset
 import com.example.engine.InningsState
 import com.example.engine.InteractivePlayFilter
@@ -42,6 +43,9 @@ data class SavedMatchResumeSnapshot(
     val source: SavedMatchSource,
     val roomCode: String? = null,
     val careerMatchType: CareerMatchType? = null,
+    val careerPlayerId: String? = null,
+    val careerPlayerName: String? = null,
+    val careerControlMode: CareerControlMode = CareerControlMode.FULL_TEAM,
     val savedAtMs: Long = System.currentTimeMillis()
 ) {
     val headline: String
@@ -88,6 +92,9 @@ class LocalMatchResumeStore(context: Context) {
                 put("source", snapshot.source.name)
                 put("roomCode", snapshot.roomCode ?: "")
                 put("careerMatchType", snapshot.careerMatchType?.name ?: "")
+                put("careerPlayerId", snapshot.careerPlayerId ?: "")
+                put("careerPlayerName", snapshot.careerPlayerName ?: "")
+                put("careerControlMode", snapshot.careerControlMode.name)
                 put("savedAtMs", snapshot.savedAtMs)
                 put("match", serializeMatch(snapshot.match))
             }
@@ -110,6 +117,14 @@ class LocalMatchResumeStore(context: Context) {
         val roomCode = root.optString("roomCode").takeIf { it.isNotBlank() }
         val careerName = root.optString("careerMatchType")
         val careerType = CareerMatchType.entries.firstOrNull { it.name == careerName }
+        val careerPlayerId = root.optString("careerPlayerId").takeIf { it.isNotBlank() }
+        val careerPlayerName = root.optString("careerPlayerName").takeIf { it.isNotBlank() }
+        val controlModeName = root.optString(
+            "careerControlMode",
+            if (careerPlayerId != null) CareerControlMode.PLAYER_ONLY.name else CareerControlMode.FULL_TEAM.name
+        )
+        val controlMode = CareerControlMode.entries.firstOrNull { it.name == controlModeName }
+            ?: if (careerPlayerId != null) CareerControlMode.PLAYER_ONLY else CareerControlMode.FULL_TEAM
         SavedMatchResumeSnapshot(
             match = match,
             userTeamId = root.optString("userTeamId"),
@@ -117,6 +132,9 @@ class LocalMatchResumeStore(context: Context) {
             source = source,
             roomCode = roomCode,
             careerMatchType = careerType,
+            careerPlayerId = careerPlayerId,
+            careerPlayerName = careerPlayerName,
+            careerControlMode = controlMode,
             savedAtMs = root.optLong("savedAtMs", 0L)
         )
     }.getOrNull()

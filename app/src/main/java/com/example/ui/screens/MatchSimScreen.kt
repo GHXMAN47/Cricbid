@@ -73,6 +73,7 @@ import com.example.data.model.MatchFormat
 import com.example.engine.ActionAnimationSnapshot
 import com.example.engine.BallEvent
 import com.example.engine.BallOutcomeType
+import com.example.engine.CareerControlMode
 import com.example.engine.DeliveryType
 import com.example.engine.FieldPreset
 import com.example.engine.InningsState
@@ -136,7 +137,7 @@ fun MatchSimScreen(
     playFilter: InteractivePlayFilter = InteractivePlayFilter.BOTH,
     showPlayModeSetup: Boolean = false,
     autoSimmingSkippedPhase: Boolean = false,
-    onConfirmPlayModeSetup: (InteractivePlayFilter, PitchType, WeatherCondition, Boolean) -> Unit = { _, _, _, _ -> },
+    onConfirmPlayModeSetup: (InteractivePlayFilter, PitchType, WeatherCondition, Boolean, CareerControlMode?) -> Unit = { _, _, _, _, _ -> },
     onChangePlayFilter: (InteractivePlayFilter) -> Unit = {},
     showDrsOverlay: Boolean = false,
     onSelectFieldPreset: (FieldPreset) -> Unit = {},
@@ -145,6 +146,12 @@ fun MatchSimScreen(
     onDismissDrs: () -> Unit = {},
     orangeCapPlayerId: String? = null,
     purpleCapPlayerId: String? = null,
+    careerPlayerId: String? = null,
+    careerPlayerName: String? = null,
+    careerControlMode: CareerControlMode = CareerControlMode.FULL_TEAM,
+    autoJumpLandscapeSignal: Long = 0L,
+    onChangeCareerControlMode: (CareerControlMode) -> Unit = {},
+    onSkipToMyTurn: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     BackHandler(onBack = onBack)
@@ -177,10 +184,22 @@ fun MatchSimScreen(
         activeRole = expectedRole
     }
 
+    // Automatically jump straight into interactive Landscape Broadcast gameplay when the created player's turn arrives
+    LaunchedEffect(autoJumpLandscapeSignal) {
+        if (autoJumpLandscapeSignal > 0L && !match.finished) {
+            activeTab = 0
+            showStatsInLandscape = false
+            preferLandscapeAction = true
+        }
+    }
+
     // Automatically jump to Scorecard when match concludes so summary & POTM are front-and-center
     LaunchedEffect(match.finished) {
-        if (match.finished && activeTab == 0) {
-            activeTab = 3
+        if (match.finished) {
+            preferLandscapeAction = false
+            if (activeTab == 0) {
+                activeTab = 3
+            }
         }
     }
 
@@ -272,7 +291,13 @@ fun MatchSimScreen(
                     onSimFullMatch = onSimFullMatch,
                     onSelectFieldPreset = onSelectFieldPreset,
                     onStartDrsReview = onStartDrsReview,
-                    onDismissDrs = onDismissDrs
+                    onDismissDrs = onDismissDrs,
+                    userTeamId = resolvedUserTeamId,
+                    careerPlayerId = careerPlayerId,
+                    careerPlayerName = careerPlayerName,
+                    careerControlMode = careerControlMode,
+                    onChangeCareerControlMode = onChangeCareerControlMode,
+                    onSkipToMyTurn = onSkipToMyTurn
                 )
             } else {
                 Column(
@@ -358,7 +383,7 @@ fun MatchSimScreen(
                                 )
                             }
                         }
-                        if (canPickBowler && !autoSimmingSkippedPhase) {
+                        if (canPickBowler && !autoSimmingSkippedPhase && !(careerControlMode == CareerControlMode.PLAYER_ONLY && !careerPlayerId.isNullOrBlank())) {
                             OutlinedButton(
                                 onClick = { showBowlerSheet = true },
                                 border = BorderStroke(1.dp, TurfEmerald.copy(alpha = 0.7f)),
@@ -619,7 +644,13 @@ fun MatchSimScreen(
                                 onSelectDelivery = { selectedDelivery = it },
                                 onPlayInteractiveBall = onPlayInteractiveBall,
                                 onSimInnings = onSimInnings,
-                                onSelectFieldPreset = onSelectFieldPreset
+                                onSelectFieldPreset = onSelectFieldPreset,
+                                userTeamId = resolvedUserTeamId,
+                                careerPlayerId = careerPlayerId,
+                                careerPlayerName = careerPlayerName,
+                                careerControlMode = careerControlMode,
+                                onChangeCareerControlMode = onChangeCareerControlMode,
+                                onSkipToMyTurn = onSkipToMyTurn
                             )
                             Spacer(Modifier.height(12.dp))
                         }
@@ -656,14 +687,17 @@ fun MatchSimScreen(
             )
         }
 
-        // Pre-Match Play Mode Setup Overlay (Batting Only / Bowling Only / Both)
+        // Pre-Match Play Mode Setup Overlay (Player-Only default in Career, or Bat/Bowl/Both)
         if (showPlayModeSetup && !match.finished) {
             PreMatchPlayModeOverlay(
                 match = match,
                 userTeamId = resolvedUserTeamId,
                 initialFilter = playFilter,
                 onConfirmStart = onConfirmPlayModeSetup,
-                onQuickAutoSimMatch = onSimFullMatch
+                onQuickAutoSimMatch = onSimFullMatch,
+                careerPlayerId = careerPlayerId,
+                careerPlayerName = careerPlayerName,
+                initialCareerControlMode = careerControlMode
             )
         }
 

@@ -65,6 +65,7 @@ import com.example.data.local.LocalCareerStore
 import com.example.data.local.LocalInternationalStore
 import com.example.data.local.LocalMatchResumeStore
 import com.example.data.local.LocalProfileStore
+import com.example.data.local.LocalSaveBackupManager
 import com.example.data.local.LocalTrophyCabinetStore
 import com.example.data.local.SavedMatchResumeSnapshot
 import com.example.data.local.SavedMatchSource
@@ -172,6 +173,7 @@ class MainActivity : ComponentActivity() {
 
 private data class StartupBootstrap(
     val profileStore: LocalProfileStore,
+    val saveBackupManager: LocalSaveBackupManager,
     val credentialManager: CredentialManager?,
     val auth: FirebaseAuth?,
     val initialProfile: AccountProfile?,
@@ -272,6 +274,7 @@ fun CricBidAppRoot(
     val bootstrapResult = remember(context, forceOfflineGuestMode) {
         try {
             val store = LocalProfileStore(context)
+            val backupMgr = LocalSaveBackupManager(context)
             val credMgr = if (forceOfflineGuestMode) null else runCatching { CredentialManager.create(context) }.getOrNull()
             val firebaseAuth = if (forceOfflineGuestMode) null else FirebaseSafeInit.safeFirebaseAuth(context)
             val loadedProfile = runCatching { store.loadActiveProfile() }.getOrNull()
@@ -279,6 +282,7 @@ fun CricBidAppRoot(
             Result.success(
                 StartupBootstrap(
                     profileStore = store,
+                    saveBackupManager = backupMgr,
                     credentialManager = credMgr,
                     auth = firebaseAuth,
                     initialProfile = loadedProfile,
@@ -305,6 +309,7 @@ fun CricBidAppRoot(
     }
 
     val profileStore = bootstrap.profileStore
+    val saveBackupManager = bootstrap.saveBackupManager
     val credentialManager = bootstrap.credentialManager
     val auth = bootstrap.auth
 
@@ -388,9 +393,9 @@ fun CricBidAppRoot(
             },
             onRestoreBackupCode = { code, password ->
                 authErrorMessage = null
-                profileStore.importBackupCode(code, password).fold(
-                    onSuccess = { restored ->
-                        activeProfile = restored
+                saveBackupManager.importBackup(code, password).fold(
+                    onSuccess = { summary ->
+                        activeProfile = summary.profile
                         savedUsernames = profileStore.listSavedUsernames()
                         enteredArena = true
                     },
@@ -410,12 +415,16 @@ fun CricBidAppRoot(
                 sessionKey = sessionKey,
                 currentUserId = activeUid,
                 profile = currentProfile,
-                backupCode = profileStore.exportBackupCode(currentProfile),
+                saveBackupManager = saveBackupManager,
                 initialRecentRoomCodes = profileStore.loadRecentRoomCodes(),
                 onRememberRoomCode = { code -> profileStore.rememberRoomCode(code) },
                 profileErrorMessage = profileErrorMessage,
                 isCloudConnected = isCloudConnected,
                 forceOfflineGuestMode = forceOfflineGuestMode,
+                onProfileRestored = { restored ->
+                    activeProfile = restored
+                    savedUsernames = profileStore.listSavedUsernames()
+                },
                 onSaveProfile = { username, avatarId, favTeam, newPassword ->
                     profileErrorMessage = null
                     val result = profileStore.updateActiveProfile(
@@ -462,12 +471,13 @@ private fun CricBidArenaFlow(
     sessionKey: String,
     currentUserId: String,
     profile: AccountProfile,
-    backupCode: String,
+    saveBackupManager: LocalSaveBackupManager,
     initialRecentRoomCodes: List<String>,
     onRememberRoomCode: (String) -> Unit,
     profileErrorMessage: String?,
     isCloudConnected: Boolean,
     forceOfflineGuestMode: Boolean,
+    onProfileRestored: (AccountProfile) -> Unit,
     onSaveProfile: (username: String, avatarId: String, favoriteTeam: String, newPassword: String?) -> Boolean,
     onRecordMatchOutcome: (won: Boolean, wonTrophy: Boolean) -> Unit,
     onSignOutToWelcome: () -> Unit,
@@ -588,6 +598,9 @@ private fun CricBidArenaFlow(
         matchSimState.match,
         matchSimState.playFilter,
         matchSimState.showPlayModeSetup,
+        matchSimState.careerPlayerId,
+        matchSimState.careerPlayerName,
+        matchSimState.careerControlMode,
         activeMatchIsInternational,
         activeCareerMatchType,
         activeState.activeRoomCode
@@ -609,7 +622,10 @@ private fun CricBidArenaFlow(
                     playFilter = matchSimState.playFilter,
                     source = src,
                     roomCode = activeState.activeRoomCode,
-                    careerMatchType = activeCareerMatchType
+                    careerMatchType = activeCareerMatchType,
+                    careerPlayerId = matchSimState.careerPlayerId,
+                    careerPlayerName = matchSimState.careerPlayerName,
+                    careerControlMode = matchSimState.careerControlMode
                 )
                 matchResumeStore?.saveOngoingMatch(snap)
                 savedMatchSnapshot = snap
@@ -739,11 +755,21 @@ private fun CricBidArenaFlow(
                     playFilter = matchSimState.playFilter,
                     showPlayModeSetup = matchSimState.showPlayModeSetup,
                     autoSimmingSkippedPhase = matchSimState.autoSimmingSkippedPhase,
-                    onConfirmPlayModeSetup = { filter, pitch, weather, dew ->
-                        matchSimViewModel.confirmPlayModeSetup(filter, pitch, weather, dew) { onFinishCareerMatch() }
+                    onConfirmPlayModeSetup = { filter, pitch, weather, dew, controlMode ->
+                        matchSimViewModel.confirmPlayModeSetup(filter, pitch, weather, dew, controlMode) { onFinishCareerMatch() }
                     },
                     onChangePlayFilter = { filter ->
                         matchSimViewModel.setPlayFilter(filter) { onFinishCareerMatch() }
+                    },
+                    careerPlayerId = matchSimState.careerPlayerId,
+                    careerPlayerName = matchSimState.careerPlayerName,
+                    careerControlMode = matchSimState.careerControlMode,
+                    autoJumpLandscapeSignal = matchSimState.autoJumpLandscapeSignal,
+                    onChangeCareerControlMode = { mode ->
+                        matchSimViewModel.setCareerControlMode(mode) { onFinishCareerMatch() }
+                    },
+                    onSkipToMyTurn = {
+                        matchSimViewModel.skipToCareerPlayerTurn { onFinishCareerMatch() }
                     },
                     showDrsOverlay = matchSimState.showDrsOverlay,
                     onSelectFieldPreset = { preset -> matchSimViewModel.setFieldPreset(preset) },
@@ -825,7 +851,7 @@ private fun CricBidArenaFlow(
                     playFilter = matchSimState.playFilter,
                     showPlayModeSetup = matchSimState.showPlayModeSetup,
                     autoSimmingSkippedPhase = matchSimState.autoSimmingSkippedPhase,
-                    onConfirmPlayModeSetup = { filter, pitch, weather, dew ->
+                    onConfirmPlayModeSetup = { filter, pitch, weather, dew, _ ->
                         matchSimViewModel.confirmPlayModeSetup(filter, pitch, weather, dew) { onFinishInternational() }
                     },
                     onChangePlayFilter = { filter ->
@@ -918,7 +944,7 @@ private fun CricBidArenaFlow(
                     playFilter = matchSimState.playFilter,
                     showPlayModeSetup = matchSimState.showPlayModeSetup,
                     autoSimmingSkippedPhase = matchSimState.autoSimmingSkippedPhase,
-                    onConfirmPlayModeSetup = { filter, pitch, weather, dew ->
+                    onConfirmPlayModeSetup = { filter, pitch, weather, dew, _ ->
                         matchSimViewModel.confirmPlayModeSetup(filter, pitch, weather, dew) { onFinishPersist() }
                     },
                     onChangePlayFilter = { filter ->
@@ -958,11 +984,18 @@ private fun CricBidArenaFlow(
                 )
             }
 
-            // 2A. Manager Profile & Indian Player Avatars Screen
+            // 2A. Manager Profile, Indian Player Avatars & Full Save Backup/Restore Screen
             inProfileScreen -> {
+                val fullBackupCode = remember(profile, careerState.activeCareer, careerState.hallOfFame, trophyCabinetData) {
+                    runCatching { saveBackupManager.exportFullBackupCode(profile) }.getOrDefault("")
+                }
+                val backupSummaryLine = remember(profile, careerState.activeCareer, careerState.hallOfFame, trophyCabinetData) {
+                    runCatching { saveBackupManager.buildBackupSummaryLine(profile) }.getOrDefault("")
+                }
                 ProfileScreen(
                     profile = profile,
-                    backupCode = backupCode,
+                    backupCode = fullBackupCode,
+                    backupSummaryLine = backupSummaryLine,
                     isCloudConnected = isCloudConnected,
                     errorMessage = profileErrorMessage,
                     onBack = { inProfileScreen = false },
@@ -973,8 +1006,25 @@ private fun CricBidArenaFlow(
                         }
                     },
                     onCopyBackupCode = {
-                        viewModel.showMessage("Account Backup Code (CB1-...) copied! Keep it safe for reinstall recovery.")
+                        viewModel.showMessage("Full Save Backup Code (CB2-...) copied! Includes Account, Career & Trophies.")
                     },
+                    onExportBackupJson = {
+                        saveBackupManager.exportFullBackupJson(profile)
+                    },
+                    onImportBackupPayload = { rawPayload ->
+                        saveBackupManager.importBackup(rawPayload).fold(
+                            onSuccess = { summary ->
+                                onProfileRestored(summary.profile)
+                                careerViewModel.reloadFromStore()
+                                trophyCabinetData = runCatching { trophyCabinetStore?.loadCabinet() }.getOrNull() ?: trophyCabinetData
+                                viewModel.showMessage("✓ ${summary.toUserMessage()}")
+                            },
+                            onFailure = { err ->
+                                viewModel.showMessage(err.message ?: "Could not restore backup save")
+                            }
+                        )
+                    },
+                    onExportFileResult = { msg -> viewModel.showMessage(msg) },
                     onConnectCloudSync = onConnectCloudSync,
                     onSignOutToWelcome = {
                         viewModel.closeRoom()
@@ -1142,8 +1192,9 @@ private fun CricBidArenaFlow(
                     onSpendSkillPoint = { stat -> careerViewModel.spendSkillPoint(stat) },
                     onRunSelectionTrial = { careerViewModel.completeSelectionTrial() },
                     onRefreshObjective = { mt -> careerViewModel.refreshObjectiveForMatchType(mt) },
-                    onPlayLiveMatch = { matchType ->
+                    onPlayLiveMatch = { matchType, controlMode ->
                         val prepared = careerViewModel.prepareLiveMatch(matchType)
+                        val activeCareer = careerState.activeCareer
                         if (prepared != null) {
                             val (myTeam, oppTeam, oppOffset) = prepared
                             careerMatchRecordedKey = null
@@ -1155,7 +1206,10 @@ private fun CricBidArenaFlow(
                                 stage = matchType.stage,
                                 format = matchType.format,
                                 opponentRatingOffset = oppOffset,
-                                userTeamId = myTeam.teamId
+                                userTeamId = myTeam.teamId,
+                                careerPlayerId = activeCareer?.id,
+                                careerPlayerName = activeCareer?.name,
+                                careerControlMode = controlMode
                             )
                         }
                     },

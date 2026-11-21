@@ -68,6 +68,7 @@ import com.example.data.model.CurrencyFormatter
 import com.example.data.model.PlayerRole
 import com.example.data.model.ProT20League
 import com.example.data.model.TrainingDrill
+import com.example.engine.CareerControlMode
 import com.example.ui.components.CareerPlayerPortrait
 import com.example.ui.components.RolePillBadge
 import com.example.ui.theme.AuctionGold
@@ -102,7 +103,7 @@ fun CareerScreen(
     onSpendSkillPoint: (CareerSkillStat) -> Unit,
     onRunSelectionTrial: () -> Unit,
     onRefreshObjective: (CareerMatchType) -> Unit,
-    onPlayLiveMatch: (CareerMatchType) -> Unit,
+    onPlayLiveMatch: (CareerMatchType, CareerControlMode) -> Unit,
     onQuickSimMatch: (CareerMatchType) -> Unit,
     onRetireToHallOfFame: () -> Unit,
     onDismissRetirement: () -> Unit,
@@ -113,6 +114,7 @@ fun CareerScreen(
 
     var topTab by rememberSaveable { mutableIntStateOf(0) } // 0 = Career Hub, 1 = Skills & Badges, 2 = Hall of Fame
     var selectedDraftLeague by rememberSaveable { mutableStateOf(ProT20League.IPL) }
+    var selectedControlMode by rememberSaveable { mutableStateOf(CareerControlMode.PLAYER_ONLY) }
 
     val activeCareer = uiState.activeCareer
     val availableFormats = activeCareer?.availableMatchTypesForCurrentStage() ?: listOf(CareerMatchType.CLUB_T20)
@@ -292,7 +294,9 @@ fun CareerScreen(
                         onDismissAuctionDraft = onDismissAuctionDraft,
                         onAcceptIntlCallUp = onAcceptIntlCallUp,
                         onRunSelectionTrial = onRunSelectionTrial,
-                        onPlayLiveMatch = onPlayLiveMatch,
+                        selectedControlMode = selectedControlMode,
+                        onSelectControlMode = { selectedControlMode = it },
+                        onPlayLiveMatch = { mt -> onPlayLiveMatch(mt, selectedControlMode) },
                         onQuickSimMatch = onQuickSimMatch,
                         onRetireToHallOfFame = onRetireToHallOfFame,
                         modifier = Modifier.weight(1f)
@@ -319,6 +323,8 @@ private fun CareerDashboardContent(
     onDismissAuctionDraft: () -> Unit,
     onAcceptIntlCallUp: () -> Unit,
     onRunSelectionTrial: () -> Unit,
+    selectedControlMode: CareerControlMode,
+    onSelectControlMode: (CareerControlMode) -> Unit,
     onPlayLiveMatch: (CareerMatchType) -> Unit,
     onQuickSimMatch: (CareerMatchType) -> Unit,
     onRetireToHallOfFame: () -> Unit,
@@ -644,6 +650,44 @@ private fun CareerDashboardContent(
                         }
                     }
 
+                    // Strict Player-Only (Default) vs Full-Team Control Toggle
+                    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Text(
+                            text = "LIVE MATCH CONTROL (PLAYER-ONLY DEFAULT)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AuctionGold
+                        )
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            CareerSelectChip(
+                                label = "★ Player-Only",
+                                selected = selectedControlMode == CareerControlMode.PLAYER_ONLY,
+                                accent = AuctionGold,
+                                onClick = { onSelectControlMode(CareerControlMode.PLAYER_ONLY) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("career_control_player_only")
+                            )
+                            CareerSelectChip(
+                                label = "Full-Team XI",
+                                selected = selectedControlMode == CareerControlMode.FULL_TEAM,
+                                accent = BoundarySky,
+                                onClick = { onSelectControlMode(CareerControlMode.FULL_TEAM) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("career_control_full_team")
+                            )
+                        }
+                        Text(
+                            text = if (selectedControlMode == CareerControlMode.PLAYER_ONLY) {
+                                "Auto-sims other players & jumps into Landscape only when ${career.name} bats or bowls."
+                            } else {
+                                "Control the entire XI interactively while highlighting ${career.name}."
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = BroadcastSilver
+                        )
+                    }
+
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
                             onClick = { onPlayLiveMatch(effectiveMatchType) },
@@ -657,7 +701,10 @@ private fun CareerDashboardContent(
                         ) {
                             Icon(Icons.Filled.PlayArrow, contentDescription = null)
                             Spacer(Modifier.width(4.dp))
-                            Text("Play Live", fontWeight = FontWeight.Bold)
+                            Text(
+                                text = if (selectedControlMode == CareerControlMode.PLAYER_ONLY) "Play My Pro" else "Play Live",
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                         OutlinedButton(
                             onClick = { onQuickSimMatch(effectiveMatchType) },

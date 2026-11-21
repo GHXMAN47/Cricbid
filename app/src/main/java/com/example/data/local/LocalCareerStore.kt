@@ -84,6 +84,41 @@ class LocalCareerStore(context: Context) {
         CricketerDatabase.registerHallOfFameLegends(activeLegends)
     }
 
+    fun exportActiveCareerJson(): JSONObject? {
+        val career = loadActiveCareer() ?: return null
+        return runCatching { serializeCareer(career) }.getOrNull()
+    }
+
+    fun importActiveCareerJson(obj: JSONObject?): CareerSaveState? {
+        if (obj == null) return null
+        return runCatching {
+            val restored = deserializeCareer(obj)
+            saveActiveCareer(restored)
+            restored
+        }.getOrNull()
+    }
+
+    fun exportHallOfFameJson(): JSONArray {
+        val arr = JSONArray()
+        loadHallOfFame().forEach { arr.put(serializeLegend(it)) }
+        return arr
+    }
+
+    fun importHallOfFameJson(arr: JSONArray?): List<HallOfFameLegend> {
+        if (arr == null) return loadHallOfFame()
+        return runCatching {
+            val list = buildList {
+                for (i in 0 until arr.length()) {
+                    arr.optJSONObject(i)?.let { add(deserializeLegend(it)) }
+                }
+            }
+            if (list.isNotEmpty()) {
+                saveHallOfFame(list)
+            }
+            list
+        }.getOrDefault(loadHallOfFame())
+    }
+
     private fun serializeAppearance(a: CareerPlayerAppearance): JSONObject = JSONObject().apply {
         put("hair", a.hairstyle.name)
         put("face", a.facialFeature.name)

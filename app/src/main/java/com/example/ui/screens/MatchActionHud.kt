@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.MatchFormat
 import com.example.engine.ActionAnimationSnapshot
+import com.example.engine.CareerControlMode
 import com.example.engine.DeliveryType
 import com.example.engine.FieldPreset
 import com.example.engine.InningsState
@@ -97,6 +98,28 @@ import java.util.Locale
  * with one-tap Side/Phase Play Filter (Bat Only / Bowl Only / Both), Sim Over, Sim Innings,
  * Scorecards/Stats, Bowler Picker, Impact Sub, Auto-Sim, and Sound mute.
  */
+internal fun computeCareerWaitingStatus(
+    match: LiveMatchState,
+    userTeamId: String,
+    careerPlayerId: String?,
+    careerPlayerName: String?
+): String? {
+    if (careerPlayerId.isNullOrBlank()) return null
+    val name = careerPlayerName?.takeIf { it.isNotBlank() } ?: "Your Pro"
+    val userBat = InteractivePhaseResolver.isUserTeamBatting(match, userTeamId)
+    return if (userBat) {
+        val entry = match.activeInnings.battingCard.firstOrNull { it.playerId == careerPlayerId }
+        when {
+            entry?.out == true -> "$name is out • Fast-simming rest of innings"
+            InteractivePhaseResolver.isCareerPlayerOnCrease(match, userTeamId, careerPlayerId) ->
+                "$name at non-striker end • Waiting for strike"
+            else -> "Waiting for $name to come in to bat..."
+        }
+    } else {
+        "Teammate bowling • Fast-simming to $name's next over"
+    }
+}
+
 @Composable
 internal fun LandscapeActionBroadcastView(
     match: LiveMatchState,
@@ -132,8 +155,19 @@ internal fun LandscapeActionBroadcastView(
     onSelectFieldPreset: (FieldPreset) -> Unit = {},
     onStartDrsReview: () -> Unit = {},
     onDismissDrs: () -> Unit = {},
+    userTeamId: String = "",
+    careerPlayerId: String? = null,
+    careerPlayerName: String? = null,
+    careerControlMode: CareerControlMode = CareerControlMode.FULL_TEAM,
+    onChangeCareerControlMode: (CareerControlMode) -> Unit = {},
+    onSkipToMyTurn: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val isStrictPlayerOnly = careerControlMode == CareerControlMode.PLAYER_ONLY && !careerPlayerId.isNullOrBlank()
+    val isCareerMyTurn = InteractivePhaseResolver.isCareerPlayerActiveTurn(match, userTeamId, careerPlayerId)
+    val waitingStatus = if (isStrictPlayerOnly && autoSimmingSkippedPhase) {
+        computeCareerWaitingStatus(match, userTeamId, careerPlayerId, careerPlayerName)
+    } else null
     val strikerName = activeInn.striker?.name ?: "Striker"
     val bowlerName = activeInn.currentBowler?.name ?: "Bowler"
     val battingTeamName = if (match.isSuperOverActive) {
@@ -141,11 +175,12 @@ internal fun LandscapeActionBroadcastView(
     } else {
         activeInn.battingTeamName
     }
+    val proTagPrefix = if (isCareerMyTurn && !careerPlayerName.isNullOrBlank()) "★ ${careerPlayerName} • " else ""
     val scoreText = if (match.isSuperOverActive) {
         val so = match.activeSuperOverInnings
-        "${so?.battingTeamName ?: activeInn.battingTeamName}  ${so?.totalRuns ?: 0}/${so?.wickets ?: 0} (${so?.oversFormatted ?: "0.0"})"
+        "$proTagPrefix${so?.battingTeamName ?: activeInn.battingTeamName}  ${so?.totalRuns ?: 0}/${so?.wickets ?: 0} (${so?.oversFormatted ?: "0.0"})"
     } else {
-        "${activeInn.battingTeamName}  ${activeInn.totalRuns}/${activeInn.wickets} (${activeInn.oversFormatted})"
+        "$proTagPrefix${activeInn.battingTeamName}  ${activeInn.totalRuns}/${activeInn.wickets} (${activeInn.oversFormatted})"
     }
 
     BoxWithConstraints(
@@ -221,7 +256,7 @@ internal fun LandscapeActionBroadcastView(
                     )
                 }
 
-                if (canPickBowler && !autoSimmingSkippedPhase) {
+                if (canPickBowler && !autoSimmingSkippedPhase && !isStrictPlayerOnly) {
                     OutlinedButton(
                         onClick = onOpenBowlerPicker,
                         border = BorderStroke(1.dp, TurfEmerald.copy(alpha = 0.7f)),
@@ -327,11 +362,43 @@ internal fun LandscapeActionBroadcastView(
                 .padding(start = 6.dp, bottom = 6.dp),
             verticalArrangement = Arrangement.spacedBy(5.dp)
         ) {
-            PlayModeFilterStrip(
-                playFilter = playFilter,
-                onSelectFilter = onChangePlayFilter,
-                compact = true
-            )
+            if (isStrictPlayerOnly) {
+                Surface(
+                    color = AuctionGold.copy(alpha = 0.18f),
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, AuctionGold.copy(alpha = 0.7f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "★ PLAYER-ONLY",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.ExtraBold,
+                                color = AuctionGold
+                            ),
+                            maxLines = 1
+                        )
+                        Text(
+                            text = "Full XI",
+                            style = MaterialTheme.typography.labelSmall.copy(color = BoundarySky, fontWeight = FontWeight.Bold),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable { onChangeCareerControlMode(CareerControlMode.FULL_TEAM) }
+                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                        )
+                    }
+                }
+            } else {
+                PlayModeFilterStrip(
+                    playFilter = playFilter,
+                    onSelectFilter = onChangePlayFilter,
+                    compact = true
+                )
+            }
             LeftThumbControlPod(
                 activeRole = activeRole,
                 selectedShot = selectedShot,
@@ -345,6 +412,8 @@ internal fun LandscapeActionBroadcastView(
                 batterConfidence = activeInn.currentBatterConfidence,
                 bowlerStamina = activeInn.currentBowlerStamina,
                 dewActive = match.isDewActiveNow,
+                careerPlayerName = careerPlayerName,
+                careerControlMode = careerControlMode,
                 compact = true,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -400,12 +469,17 @@ internal fun LandscapeActionBroadcastView(
                 .padding(end = 6.dp, bottom = 6.dp),
             verticalArrangement = Arrangement.spacedBy(5.dp)
         ) {
-            if (autoSimmingSkippedPhase) {
+            if (autoSimmingSkippedPhase || (isStrictPlayerOnly && !isCareerMyTurn)) {
                 SkippedPhaseAutoSimCard(
                     battingTeamName = battingTeamName,
                     playFilter = playFilter,
                     onSkipInningsNow = onSimInnings,
                     onSwitchToBoth = { onChangePlayFilter(InteractivePlayFilter.BOTH) },
+                    careerPlayerName = careerPlayerName,
+                    careerControlMode = careerControlMode,
+                    careerWaitingStatus = waitingStatus,
+                    onSkipToMyTurn = onSkipToMyTurn,
+                    onSwitchToFullTeam = { onChangeCareerControlMode(CareerControlMode.FULL_TEAM) },
                     compact = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -482,8 +556,19 @@ internal fun PortraitActionTabContent(
     onPlayInteractiveBall: (InteractiveBallInput) -> Unit,
     onSimInnings: () -> Unit,
     onSelectFieldPreset: (FieldPreset) -> Unit = {},
+    userTeamId: String = "",
+    careerPlayerId: String? = null,
+    careerPlayerName: String? = null,
+    careerControlMode: CareerControlMode = CareerControlMode.FULL_TEAM,
+    onChangeCareerControlMode: (CareerControlMode) -> Unit = {},
+    onSkipToMyTurn: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val isStrictPlayerOnly = careerControlMode == CareerControlMode.PLAYER_ONLY && !careerPlayerId.isNullOrBlank()
+    val isCareerMyTurn = InteractivePhaseResolver.isCareerPlayerActiveTurn(match, userTeamId, careerPlayerId)
+    val waitingStatus = if (isStrictPlayerOnly && autoSimmingSkippedPhase) {
+        computeCareerWaitingStatus(match, userTeamId, careerPlayerId, careerPlayerName)
+    } else null
     val strikerName = activeInn.striker?.name ?: "Striker"
     val bowlerName = activeInn.currentBowler?.name ?: "Bowler"
     val battingTeamName = if (match.isSuperOverActive) {
@@ -516,23 +601,74 @@ internal fun PortraitActionTabContent(
                 .aspectRatio(16f / 9.2f)
         )
 
-        // Side / Phase Play Filter Selector (Batting Only | Bowling Only | Both)
+        // Side / Phase Play Filter Selector (or Strict Player-Only Career Mode Bar)
         if (!match.finished) {
-            PlayModeFilterStrip(
-                playFilter = playFilter,
-                onSelectFilter = onChangePlayFilter,
-                compact = false
-            )
+            if (!careerPlayerId.isNullOrBlank()) {
+                Surface(
+                    color = NavySurface,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, if (isStrictPlayerOnly) AuctionGold.copy(alpha = 0.7f) else NavyOutline),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        CareerControlMode.entries.forEach { mode ->
+                            val selected = careerControlMode == mode
+                            val accent = if (mode == CareerControlMode.PLAYER_ONLY) AuctionGold else BoundarySky
+                            Surface(
+                                color = if (selected) accent.copy(alpha = 0.22f) else NavySurfaceHigh,
+                                shape = RoundedCornerShape(8.dp),
+                                border = BorderStroke(1.dp, if (selected) accent else NavyOutline),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(38.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { onChangeCareerControlMode(mode) }
+                                    .testTag("career_hud_mode_${mode.name.lowercase()}")
+                            ) {
+                                Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 4.dp)) {
+                                    Text(
+                                        text = if (mode == CareerControlMode.PLAYER_ONLY) {
+                                            "★ ${careerPlayerName ?: "My Pro"} Only"
+                                        } else {
+                                            "Full Team XI"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                                            color = if (selected) accent else BroadcastSilver
+                                        ),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                PlayModeFilterStrip(
+                    playFilter = playFilter,
+                    onSelectFilter = onChangePlayFilter,
+                    compact = false
+                )
+            }
         }
 
         // Side-by-side Left & Right Thumb Controls (work cleanly even with rotation locked!)
         if (!match.finished) {
-            if (autoSimmingSkippedPhase) {
+            if (autoSimmingSkippedPhase || (isStrictPlayerOnly && !isCareerMyTurn)) {
                 SkippedPhaseAutoSimCard(
                     battingTeamName = battingTeamName,
                     playFilter = playFilter,
                     onSkipInningsNow = onSimInnings,
                     onSwitchToBoth = { onChangePlayFilter(InteractivePlayFilter.BOTH) },
+                    careerPlayerName = careerPlayerName,
+                    careerControlMode = careerControlMode,
+                    careerWaitingStatus = waitingStatus,
+                    onSkipToMyTurn = onSkipToMyTurn,
+                    onSwitchToFullTeam = { onChangeCareerControlMode(CareerControlMode.FULL_TEAM) },
                     compact = false,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -555,6 +691,8 @@ internal fun PortraitActionTabContent(
                         batterConfidence = activeInn.currentBatterConfidence,
                         bowlerStamina = activeInn.currentBowlerStamina,
                         dewActive = match.isDewActiveNow,
+                        careerPlayerName = careerPlayerName,
+                        careerControlMode = careerControlMode,
                         compact = true,
                         modifier = Modifier.weight(1f)
                     )
@@ -620,10 +758,15 @@ internal fun PreMatchPlayModeOverlay(
     match: LiveMatchState,
     userTeamId: String,
     initialFilter: InteractivePlayFilter,
-    onConfirmStart: (InteractivePlayFilter, PitchType, WeatherCondition, Boolean) -> Unit,
+    onConfirmStart: (InteractivePlayFilter, PitchType, WeatherCondition, Boolean, CareerControlMode?) -> Unit,
     onQuickAutoSimMatch: () -> Unit,
+    careerPlayerId: String? = null,
+    careerPlayerName: String? = null,
+    initialCareerControlMode: CareerControlMode = CareerControlMode.PLAYER_ONLY,
     modifier: Modifier = Modifier
 ) {
+    val isCareerMatch = !careerPlayerId.isNullOrBlank()
+    var chosenCareerMode by remember(initialCareerControlMode) { mutableStateOf(initialCareerControlMode) }
     var chosenFilter by remember(initialFilter) { mutableStateOf(initialFilter) }
     var chosenPitch by remember(match.pitchType) { mutableStateOf(match.pitchType) }
     var chosenWeather by remember(match.weatherCondition) { mutableStateOf(match.weatherCondition) }
@@ -655,7 +798,7 @@ internal fun PreMatchPlayModeOverlay(
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
-                        text = "CHOOSE PLAY MODE",
+                        text = if (isCareerMatch) "CAREER MATCH SETUP" else "CHOOSE PLAY MODE",
                         style = MaterialTheme.typography.headlineSmall.copy(
                             fontFamily = DisplayFontFamily,
                             fontWeight = FontWeight.ExtraBold,
@@ -681,69 +824,133 @@ internal fun PreMatchPlayModeOverlay(
                     )
                 }
 
-                // 3 Play Filter Cards
-                val options = listOf(
-                    Triple(
-                        InteractivePlayFilter.BATTING_ONLY,
-                        Icons.Filled.SportsCricket,
-                        TurfEmerald
-                    ),
-                    Triple(
-                        InteractivePlayFilter.BOWLING_ONLY,
-                        Icons.Filled.SportsBaseball,
-                        BoundarySky
-                    ),
-                    Triple(
-                        InteractivePlayFilter.BOTH,
-                        Icons.Filled.Bolt,
-                        AuctionGold
-                    )
-                )
-
-                options.forEach { (filter, icon, accent) ->
-                    val selected = chosenFilter == filter
-                    Surface(
-                        color = if (selected) accent.copy(alpha = 0.18f) else NavySurfaceHigh,
-                        shape = RoundedCornerShape(14.dp),
-                        border = BorderStroke(if (selected) 1.6.dp else 1.dp, if (selected) accent else NavyOutline),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .clickable { chosenFilter = filter }
-                            .testTag("setup_mode_${filter.name.lowercase()}")
-                    ) {
-                        Row(
+                // Career Match: Player-Only (Default & Strict) vs Full-Team Toggle
+                if (isCareerMatch) {
+                    val proLabel = careerPlayerName?.takeIf { it.isNotBlank() } ?: "Your Pro"
+                    CareerControlMode.entries.forEach { mode ->
+                        val selected = chosenCareerMode == mode
+                        val accent = if (mode == CareerControlMode.PLAYER_ONLY) AuctionGold else BoundarySky
+                        Surface(
+                            color = if (selected) accent.copy(alpha = 0.18f) else NavySurfaceHigh,
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(if (selected) 1.6.dp else 1.dp, if (selected) accent else NavyOutline),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { chosenCareerMode = mode }
+                                .testTag("setup_career_mode_${mode.name.lowercase()}")
                         ) {
-                            Icon(
-                                imageVector = icon,
-                                contentDescription = null,
-                                tint = if (selected) accent else BroadcastSilver,
-                                modifier = Modifier.size(24.dp)
-                            )
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = filter.label,
-                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                                    color = if (selected) accent else BroadcastWhite
-                                )
-                                Text(
-                                    text = filter.description,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = BroadcastSilver
-                                )
-                            }
-                            if (selected) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
                                 Icon(
-                                    imageVector = Icons.Filled.CheckCircle,
-                                    contentDescription = "Selected",
-                                    tint = accent,
-                                    modifier = Modifier.size(22.dp)
+                                    imageVector = if (mode == CareerControlMode.PLAYER_ONLY) Icons.Filled.SportsCricket else Icons.Filled.Bolt,
+                                    contentDescription = null,
+                                    tint = if (selected) accent else BroadcastSilver,
+                                    modifier = Modifier.size(24.dp)
                                 )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = if (mode == CareerControlMode.PLAYER_ONLY) {
+                                            "★ Player-Only: $proLabel (Recommended)"
+                                        } else {
+                                            "Full-Team XI Control"
+                                        },
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = if (selected) accent else BroadcastWhite
+                                    )
+                                    Text(
+                                        text = if (mode == CareerControlMode.PLAYER_ONLY) {
+                                            "Auto-sims teammates & jumps into Landscape ONLY when $proLabel faces a ball or bowls an over"
+                                        } else {
+                                            "Control every batter & bowler in the XI while highlighting $proLabel"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = BroadcastSilver
+                                    )
+                                }
+                                if (selected) {
+                                    Icon(
+                                        imageVector = Icons.Filled.CheckCircle,
+                                        contentDescription = "Selected",
+                                        tint = accent,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 3 Play Filter Cards (shown for Team matches or Career Full-Team mode)
+                if (!isCareerMatch || chosenCareerMode == CareerControlMode.FULL_TEAM) {
+                    val options = listOf(
+                        Triple(
+                            InteractivePlayFilter.BATTING_ONLY,
+                            Icons.Filled.SportsCricket,
+                            TurfEmerald
+                        ),
+                        Triple(
+                            InteractivePlayFilter.BOWLING_ONLY,
+                            Icons.Filled.SportsBaseball,
+                            BoundarySky
+                        ),
+                        Triple(
+                            InteractivePlayFilter.BOTH,
+                            Icons.Filled.Bolt,
+                            AuctionGold
+                        )
+                    )
+
+                    options.forEach { (filter, icon, accent) ->
+                        val selected = chosenFilter == filter
+                        Surface(
+                            color = if (selected) accent.copy(alpha = 0.18f) else NavySurfaceHigh,
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(if (selected) 1.6.dp else 1.dp, if (selected) accent else NavyOutline),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { chosenFilter = filter }
+                                .testTag("setup_mode_${filter.name.lowercase()}")
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Icon(
+                                    imageVector = icon,
+                                    contentDescription = null,
+                                    tint = if (selected) accent else BroadcastSilver,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = filter.label,
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = if (selected) accent else BroadcastWhite
+                                    )
+                                    Text(
+                                        text = filter.description,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = BroadcastSilver
+                                    )
+                                }
+                                if (selected) {
+                                    Icon(
+                                        imageVector = Icons.Filled.CheckCircle,
+                                        contentDescription = "Selected",
+                                        tint = accent,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
                             }
                         }
                     }
@@ -878,6 +1085,8 @@ internal fun PreMatchPlayModeOverlay(
 
                 // Confirm & Start Interactive Match Button
                 val startHint = when {
+                    isCareerMatch && chosenCareerMode == CareerControlMode.PLAYER_ONLY ->
+                        "Start Player-Only (${careerPlayerName ?: "My Pro"})"
                     chosenFilter == InteractivePlayFilter.BATTING_ONLY && !userBattingFirst ->
                         "Start (Auto-Sim Opponent 1st Inn → Bat)"
                     chosenFilter == InteractivePlayFilter.BOWLING_ONLY && userBattingFirst ->
@@ -885,7 +1094,18 @@ internal fun PreMatchPlayModeOverlay(
                     else -> "Start Match (${chosenFilter.label})"
                 }
                 Button(
-                    onClick = { onConfirmStart(chosenFilter, chosenPitch, chosenWeather, chosenDew) },
+                    onClick = {
+                        val effectiveFilter = if (isCareerMatch && chosenCareerMode == CareerControlMode.PLAYER_ONLY) {
+                            InteractivePlayFilter.BOTH
+                        } else chosenFilter
+                        onConfirmStart(
+                            effectiveFilter,
+                            chosenPitch,
+                            chosenWeather,
+                            chosenDew,
+                            if (isCareerMatch) chosenCareerMode else null
+                        )
+                    },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = TurfEmerald,
                         contentColor = OnEmeraldDark

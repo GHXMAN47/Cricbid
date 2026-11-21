@@ -50,6 +50,17 @@ class CareerViewModel(
     )
     val uiState: StateFlow<CareerUiState> = _uiState.asStateFlow()
 
+    fun reloadFromStore() {
+        _uiState.update {
+            it.copy(
+                activeCareer = store.loadActiveCareer(),
+                hallOfFame = store.loadHallOfFame(),
+                latestAuctionDraft = null,
+                latestRetiredLegend = null
+            )
+        }
+    }
+
     fun createRookieCareer(
         name: String,
         startingAge: Int,
