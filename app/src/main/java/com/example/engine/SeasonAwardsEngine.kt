@@ -72,16 +72,18 @@ data class SeasonPlayerLeader(
 data class SeasonLeaderboardSummary(
     val orangeCapTable: List<SeasonPlayerLeader> = emptyList(),
     val purpleCapTable: List<SeasonPlayerLeader> = emptyList(),
-    val mvpTable: List<SeasonPlayerLeader> = emptyList()
+    val mvpTable: List<SeasonPlayerLeader> = emptyList(),
+    val emergingTable: List<SeasonPlayerLeader> = emptyList()
 ) {
     val orangeCapHolder: SeasonPlayerLeader? get() = orangeCapTable.firstOrNull { it.runs > 0 }
     val purpleCapHolder: SeasonPlayerLeader? get() = purpleCapTable.firstOrNull { it.wickets > 0 }
     val mvpHolder: SeasonPlayerLeader? get() = mvpTable.firstOrNull { it.mvpPoints > 0.0 }
+    val emergingPlayerHolder: SeasonPlayerLeader? get() = emergingTable.firstOrNull { it.mvpPoints > 0.0 }
 
     val orangeCapPlayerId: String? get() = orangeCapHolder?.playerId
     val purpleCapPlayerId: String? get() = purpleCapHolder?.playerId
     val hasData: Boolean
-        get() = orangeCapTable.isNotEmpty() || purpleCapTable.isNotEmpty() || mvpTable.isNotEmpty()
+        get() = orangeCapTable.isNotEmpty() || purpleCapTable.isNotEmpty() || mvpTable.isNotEmpty() || emergingTable.isNotEmpty()
 }
 
 data class TrophyCabinetRecord(
@@ -95,6 +97,7 @@ data class TrophyCabinetRecord(
     val orangeCapWinner: String = "",
     val purpleCapWinner: String = "",
     val mvpWinner: String = "",
+    val emergingPlayerWinner: String = "",
     val timestampMs: Long = System.currentTimeMillis()
 )
 
@@ -189,10 +192,16 @@ object SeasonAwardsEngine {
             .sortedByDescending { it.mvpPoints }
             .take(12)
 
+        val emerging = leaders
+            .filter { it.mvpPoints > 0.0 && com.example.data.model.Ipl2026Catalog.isEmergingEligible(it.playerId) }
+            .sortedByDescending { it.mvpPoints }
+            .take(10)
+
         return SeasonLeaderboardSummary(
             orangeCapTable = orange,
             purpleCapTable = purple,
-            mvpTable = mvp
+            mvpTable = mvp,
+            emergingTable = emerging
         )
     }
 

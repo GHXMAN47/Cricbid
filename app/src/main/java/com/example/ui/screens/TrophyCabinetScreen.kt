@@ -335,7 +335,7 @@ private fun TrophyRecordCard(record: TrophyCabinetRecord) {
                     color = BroadcastSilver
                 )
             }
-            if (record.orangeCapWinner.isNotBlank() || record.purpleCapWinner.isNotBlank() || record.mvpWinner.isNotBlank()) {
+            if (record.orangeCapWinner.isNotBlank() || record.purpleCapWinner.isNotBlank() || record.mvpWinner.isNotBlank() || record.emergingPlayerWinner.isNotBlank()) {
                 Spacer(Modifier.height(2.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -350,6 +350,9 @@ private fun TrophyRecordCard(record: TrophyCabinetRecord) {
                 }
                 if (record.mvpWinner.isNotBlank()) {
                     AwardMiniPill("⭐ MVP: ${record.mvpWinner}", AuctionGold, Modifier.fillMaxWidth())
+                }
+                if (record.emergingPlayerWinner.isNotBlank()) {
+                    AwardMiniPill("🌱 Emerging: ${record.emergingPlayerWinner}", TurfEmerald, Modifier.fillMaxWidth())
                 }
             }
         }
@@ -380,16 +383,18 @@ private fun SeasonCapsTabContent(
     activeCompetitionTitle: String,
     modifier: Modifier = Modifier
 ) {
-    var boardIdx by remember { mutableIntStateOf(0) } // 0=Orange, 1=Purple, 2=MVP
+    var boardIdx by remember { mutableIntStateOf(0) } // 0=Orange, 1=Purple, 2=MVP, 3=Emerging
     val list = when (boardIdx) {
         0 -> summary.orangeCapTable
         1 -> summary.purpleCapTable
-        else -> summary.mvpTable
+        2 -> summary.mvpTable
+        else -> summary.emergingTable
     }
     val accent = when (boardIdx) {
         0 -> OrangeCapAccent
         1 -> PurpleCapAccent
-        else -> AuctionGold
+        2 -> AuctionGold
+        else -> TurfEmerald
     }
 
     LazyColumn(
@@ -407,38 +412,54 @@ private fun SeasonCapsTabContent(
                 )
             )
             Spacer(Modifier.height(6.dp))
-            // Live Cap Holder Spotlight Trio
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                CapSpotlightCard(
-                    title = "🟠 ORANGE CAP",
-                    leader = summary.orangeCapHolder,
-                    statText = summary.orangeCapHolder?.let { "${it.runs} Runs" } ?: "TBD",
-                    accent = OrangeCapAccent,
-                    selected = boardIdx == 0,
-                    onClick = { boardIdx = 0 },
-                    modifier = Modifier.weight(1f)
-                )
-                CapSpotlightCard(
-                    title = "🟣 PURPLE CAP",
-                    leader = summary.purpleCapHolder,
-                    statText = summary.purpleCapHolder?.let { "${it.wickets} Wkts" } ?: "TBD",
-                    accent = PurpleCapAccent,
-                    selected = boardIdx == 1,
-                    onClick = { boardIdx = 1 },
-                    modifier = Modifier.weight(1f)
-                )
-                CapSpotlightCard(
-                    title = "⭐ SEASON MVP",
-                    leader = summary.mvpHolder,
-                    statText = summary.mvpHolder?.let { "${it.mvpPoints.toInt()} pts" } ?: "TBD",
-                    accent = AuctionGold,
-                    selected = boardIdx == 2,
-                    onClick = { boardIdx = 2 },
-                    modifier = Modifier.weight(1f)
-                )
+            // Live Cap Holder Spotlight Quad (Orange, Purple, MVP, Emerging)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CapSpotlightCard(
+                        title = "🟠 ORANGE CAP",
+                        leader = summary.orangeCapHolder,
+                        statText = summary.orangeCapHolder?.let { "${it.runs} Runs" } ?: "TBD",
+                        accent = OrangeCapAccent,
+                        selected = boardIdx == 0,
+                        onClick = { boardIdx = 0 },
+                        modifier = Modifier.weight(1f)
+                    )
+                    CapSpotlightCard(
+                        title = "🟣 PURPLE CAP",
+                        leader = summary.purpleCapHolder,
+                        statText = summary.purpleCapHolder?.let { "${it.wickets} Wkts" } ?: "TBD",
+                        accent = PurpleCapAccent,
+                        selected = boardIdx == 1,
+                        onClick = { boardIdx = 1 },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CapSpotlightCard(
+                        title = "⭐ SEASON MVP",
+                        leader = summary.mvpHolder,
+                        statText = summary.mvpHolder?.let { "${it.mvpPoints.toInt()} pts" } ?: "TBD",
+                        accent = AuctionGold,
+                        selected = boardIdx == 2,
+                        onClick = { boardIdx = 2 },
+                        modifier = Modifier.weight(1f)
+                    )
+                    CapSpotlightCard(
+                        title = "🌱 EMERGING STAR",
+                        leader = summary.emergingPlayerHolder,
+                        statText = summary.emergingPlayerHolder?.let { "${it.mvpPoints.toInt()} pts" } ?: "TBD",
+                        accent = TurfEmerald,
+                        selected = boardIdx == 3,
+                        onClick = { boardIdx = 3 },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
         }
 

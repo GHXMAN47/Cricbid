@@ -27,6 +27,7 @@ import org.json.JSONObject
 
 enum class SavedMatchSource {
     IPL_ROOM,
+    IPL_SEASON,
     INTERNATIONAL,
     CAREER;
 
@@ -162,6 +163,11 @@ class LocalMatchResumeStore(context: Context) {
         put("teamBChemistry", m.teamBChemistry)
         put("teamAImpactUsed", m.teamAImpactUsed)
         put("teamBImpactUsed", m.teamBImpactUsed)
+        put("isIplRules", m.isIplRules)
+        put("teamAImpactNominees", JSONArray(m.teamAImpactNominees))
+        put("teamBImpactNominees", JSONArray(m.teamBImpactNominees))
+        put("teamAStartingOverseasCount", m.teamAStartingOverseasCount)
+        put("teamBStartingOverseasCount", m.teamBStartingOverseasCount)
         put("activeInningsNumber", m.activeInningsNumber)
         put("innings1", serializeInnings(m.innings1))
         put("innings2", serializeInnings(m.innings2))
@@ -229,7 +235,12 @@ class LocalMatchResumeStore(context: Context) {
             innings1 = inn1,
             innings2 = inn2,
             activeInningsNumber = o.optInt("activeInningsNumber", 1).coerceIn(1, 2),
-            commentaryFeed = comm
+            commentaryFeed = comm,
+            isIplRules = o.optBoolean("isIplRules", false),
+            teamAImpactNominees = o.optJSONArray("teamAImpactNominees").toStringList(),
+            teamBImpactNominees = o.optJSONArray("teamBImpactNominees").toStringList(),
+            teamAStartingOverseasCount = o.optInt("teamAStartingOverseasCount", 0),
+            teamBStartingOverseasCount = o.optInt("teamBStartingOverseasCount", 0)
         )
     }
 

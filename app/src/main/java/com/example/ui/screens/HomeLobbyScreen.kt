@@ -66,6 +66,7 @@ import com.example.data.local.AccountProfile
 import com.example.data.local.SavedMatchResumeSnapshot
 import com.example.data.model.AuctionRoom
 import com.example.data.model.CareerSaveState
+import com.example.data.model.IplSeasonState
 import com.example.data.model.RoomStatus
 import com.example.engine.TrophyCabinetData
 import com.example.ui.components.CareerPlayerPortrait
@@ -100,6 +101,7 @@ fun HomeLobbyScreen(
     onOpenRoom: (String) -> Unit,
     onOpenInternational: () -> Unit,
     onOpenCareerMode: () -> Unit = {},
+    onOpenIplMode: () -> Unit = {},
     onOpenProfile: () -> Unit,
     onClearJoinStatus: () -> Unit = {},
     onConnectCloudSync: () -> Unit,
@@ -111,6 +113,7 @@ fun HomeLobbyScreen(
     onOpenTrophyCabinet: () -> Unit = {},
     resumableRoom: AuctionRoom? = null,
     activeCareer: CareerSaveState? = null,
+    activeIplSeason: IplSeasonState? = null,
     modifier: Modifier = Modifier
 ) {
     var createTeamName by rememberSaveable(profile.favoriteTeamName) {
@@ -566,6 +569,149 @@ fun HomeLobbyScreen(
                                                 style = MaterialTheme.typography.labelSmall.copy(
                                                     fontSize = 10.sp,
                                                     color = TurfEmerald,
+                                                    fontWeight = FontWeight.SemiBold
+                                                ),
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ═══════════════════════════════════════════════════════════════
+            // SECTION 1B: INDIAN PREMIER LEAGUE 2026 (OFFICIAL MODE)
+            // Solo or Friend Room • 10 Franchises • ₹120 Cr Mega Auction • 70 Matches
+            // ═══════════════════════════════════════════════════════════════
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "INDIAN PREMIER LEAGUE 2026",
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontFamily = DisplayFontFamily,
+                                letterSpacing = 1.2.sp,
+                                color = TurfEmerald
+                            )
+                        )
+                        Text(
+                            text = "SOLO & FRIEND ROOM",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 10.sp,
+                                color = BroadcastMuted
+                            )
+                        )
+                    }
+                    Surface(
+                        color = NavySurface,
+                        shape = RoundedCornerShape(20.dp),
+                        border = BorderStroke(1.5.dp, TurfEmerald.copy(alpha = 0.85f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(20.dp))
+                            .clickable(onClick = onOpenIplMode)
+                            .testTag("open_ipl_mode_button")
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    color = TurfEmerald.copy(alpha = 0.18f),
+                                    shape = RoundedCornerShape(14.dp),
+                                    border = BorderStroke(1.dp, TurfEmerald.copy(alpha = 0.6f)),
+                                    modifier = Modifier.size(54.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Gavel,
+                                            contentDescription = stringResource(R.string.ipl_mode_title),
+                                            tint = TurfEmerald,
+                                            modifier = Modifier.size(28.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(Modifier.width(14.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = if (activeIplSeason != null) {
+                                                "IPL ${activeIplSeason.seasonYear} • ${activeIplSeason.activeHumanFranchise?.shortCode ?: "SEASON"}"
+                                            } else {
+                                                "IPL 2026 OFFICIAL MODE"
+                                            },
+                                            style = MaterialTheme.typography.titleMedium.copy(
+                                                fontFamily = DisplayFontFamily,
+                                                letterSpacing = 0.8.sp,
+                                                color = BroadcastWhite
+                                            )
+                                        )
+                                        Surface(
+                                            color = AuctionGold.copy(alpha = 0.2f),
+                                            shape = RoundedCornerShape(6.dp)
+                                        ) {
+                                            Text(
+                                                text = if (activeIplSeason != null) activeIplSeason.phase.name else "10 TEAMS",
+                                                style = MaterialTheme.typography.labelSmall.copy(
+                                                    fontFamily = MonoFontFamily,
+                                                    color = AuctionGold,
+                                                    fontWeight = FontWeight.ExtraBold
+                                                ),
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = if (activeIplSeason != null) {
+                                            "${activeIplSeason.phase.label} • League ${activeIplSeason.leagueCompletedCount}/70 • Resume Season"
+                                        } else {
+                                            stringResource(R.string.ipl_mode_subtitle)
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = BroadcastSilver,
+                                        modifier = Modifier.padding(top = 3.dp)
+                                    )
+                                }
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                    contentDescription = "Open IPL 2026 Mode",
+                                    tint = TurfEmerald
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                listOf("₹120 Cr + RTM", "Impact Sub & DRS", "70 Matches + Playoffs").forEach { tag ->
+                                    Surface(
+                                        color = NavySurfaceHigh,
+                                        shape = RoundedCornerShape(8.dp),
+                                        border = BorderStroke(1.dp, NavyOutline),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Box(
+                                            contentAlignment = Alignment.Center,
+                                            modifier = Modifier.padding(vertical = 5.dp, horizontal = 4.dp)
+                                        ) {
+                                            Text(
+                                                text = tag,
+                                                style = MaterialTheme.typography.labelSmall.copy(
+                                                    fontSize = 10.sp,
+                                                    color = AuctionGold,
                                                     fontWeight = FontWeight.SemiBold
                                                 ),
                                                 maxLines = 1

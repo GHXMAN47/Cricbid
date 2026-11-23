@@ -204,6 +204,10 @@ internal fun LandscapeActionBroadcastView(
             pitchType = match.pitchType,
             dewActive = match.isDewActiveNow,
             fieldPreset = match.fieldPreset,
+            maxFieldersOutsideCircle = activeInn.maxFieldersOutsideCircle(match.isIplRules),
+            isPowerplay = activeInn.isPowerplayNow,
+            isFreeHit = activeInn.isFreeHitNextBall,
+            slowOverRatePenalty = activeInn.slowOverRatePenaltyActive,
             soundEffects = soundEffects,
             modifier = Modifier.fillMaxSize()
         )
@@ -412,6 +416,8 @@ internal fun LandscapeActionBroadcastView(
                 batterConfidence = activeInn.currentBatterConfidence,
                 bowlerStamina = activeInn.currentBowlerStamina,
                 dewActive = match.isDewActiveNow,
+                bouncersThisOver = activeInn.bouncersThisOver,
+                isFreeHit = activeInn.isFreeHitNextBall,
                 careerPlayerName = careerPlayerName,
                 careerControlMode = careerControlMode,
                 compact = true,
@@ -595,6 +601,10 @@ internal fun PortraitActionTabContent(
             pitchType = match.pitchType,
             dewActive = match.isDewActiveNow,
             fieldPreset = match.fieldPreset,
+            maxFieldersOutsideCircle = activeInn.maxFieldersOutsideCircle(match.isIplRules),
+            isPowerplay = activeInn.isPowerplayNow,
+            isFreeHit = activeInn.isFreeHitNextBall,
+            slowOverRatePenalty = activeInn.slowOverRatePenaltyActive,
             soundEffects = soundEffects,
             modifier = Modifier
                 .fillMaxWidth()
@@ -691,6 +701,8 @@ internal fun PortraitActionTabContent(
                         batterConfidence = activeInn.currentBatterConfidence,
                         bowlerStamina = activeInn.currentBowlerStamina,
                         dewActive = match.isDewActiveNow,
+                        bouncersThisOver = activeInn.bouncersThisOver,
+                        isFreeHit = activeInn.isFreeHitNextBall,
                         careerPlayerName = careerPlayerName,
                         careerControlMode = careerControlMode,
                         compact = true,
@@ -1077,6 +1089,59 @@ internal fun PreMatchPlayModeOverlay(
                                         fontWeight = FontWeight.ExtraBold,
                                         color = if (chosenDew) BoundarySky else BroadcastMuted
                                     )
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Official IPL Toss Rules & 5 Impact Player Substitutes Nomination Card
+                if (match.isIplRules) {
+                    val userTeam = if (userTeamId == match.teamB.teamId) match.teamB else match.teamA
+                    val nominatedIds = if (userTeam.teamId == match.teamB.teamId) match.teamBImpactNominees else match.teamAImpactNominees
+                    val startOs = if (userTeam.teamId == match.teamB.teamId) match.teamBStartingOverseasCount else match.teamAStartingOverseasCount
+                    val nomNames = nominatedIds.mapNotNull { id ->
+                        com.example.data.model.CricketerDatabase.getById(id)?.let { p ->
+                            if (p.overseas) "${p.name} (OS)" else p.name
+                        }
+                    }
+                    Surface(
+                        color = BoundarySky.copy(alpha = 0.12f),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, BoundarySky.copy(alpha = 0.45f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = "⚡ IPL OFFICIAL RULES ACTIVE",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    color = BoundarySky,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    letterSpacing = 0.7.sp
+                                )
+                            )
+                            Text(
+                                text = "PP Max 2 Out • 2 Bouncers/Ov • 2 DRS (incl. Wide/NB) • Time-Outs • Unlimited Super Overs",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                color = BroadcastSilver
+                            )
+                            Text(
+                                text = "5 Impact Subs (${userTeam.teamName}): ${nomNames.joinToString(", ").ifBlank { "Auto-nominated from bench" }}",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                color = BroadcastWhite
+                            )
+                            if (startOs >= 4) {
+                                Text(
+                                    text = "Starting XI has 4 Overseas → Indian Impact Player only.",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, color = AuctionGold)
+                                )
+                            } else {
+                                Text(
+                                    text = "Starting XI has $startOs Overseas → Overseas or Indian Impact Player eligible!",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, color = TurfEmerald)
                                 )
                             }
                         }

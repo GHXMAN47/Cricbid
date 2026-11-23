@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.engine.DrsMode
 import com.example.engine.DrsPendingDecision
+import com.example.engine.DrsReviewType
 import com.example.ui.theme.AuctionGold
 import com.example.ui.theme.BoundarySky
 import com.example.ui.theme.BroadcastMuted
@@ -90,14 +91,20 @@ fun DrsReviewOverlay(
 
     val p = progress.value
     val verdictReady = p >= 0.96f
+    val isExtraReview = decision.reviewType == DrsReviewType.WIDE_CALL || decision.reviewType == DrsReviewType.NO_BALL_CALL
     val finalOut = if (decision.overturned) !decision.originalDecisionOut else decision.originalDecisionOut
+    val finalExtra = if (decision.overturned) !decision.originalExtraCalled else decision.originalExtraCalled
     val verdictColor = when {
         !verdictReady -> BoundarySky
+        isExtraReview && finalExtra -> AuctionGold
+        isExtraReview -> TurfEmerald
         finalOut -> WicketCrimson
         else -> TurfEmerald
     }
     val verdictTitle = when {
         !verdictReady -> "THIRD UMPIRE REVIEWING..."
+        decision.reviewType == DrsReviewType.WIDE_CALL -> if (finalExtra) "WIDE BALL!" else "FAIR DELIVERY!"
+        decision.reviewType == DrsReviewType.NO_BALL_CALL -> if (finalExtra) "NO-BALL + FREE HIT!" else "FAIR DELIVERY!"
         finalOut -> "OUT!"
         else -> "NOT OUT!"
     }
@@ -163,8 +170,13 @@ fun DrsReviewOverlay(
                         shape = RoundedCornerShape(8.dp),
                         border = BorderStroke(1.dp, AuctionGold.copy(alpha = 0.5f))
                     ) {
+                        val onFieldLabel = when (decision.reviewType) {
+                            DrsReviewType.WIDE_CALL -> if (decision.originalExtraCalled) "WIDE" else "FAIR BALL"
+                            DrsReviewType.NO_BALL_CALL -> if (decision.originalExtraCalled) "NO-BALL" else "FAIR BALL"
+                            DrsReviewType.DISMISSAL -> if (decision.originalDecisionOut) "OUT" else "NOT OUT"
+                        }
                         Text(
-                            text = "ON-FIELD: ${if (decision.originalDecisionOut) "OUT" else "NOT OUT"}",
+                            text = "ON-FIELD: $onFieldLabel",
                             style = MaterialTheme.typography.labelSmall.copy(
                                 fontFamily = MonoFontFamily,
                                 fontWeight = FontWeight.Bold,
@@ -185,15 +197,24 @@ fun DrsReviewOverlay(
                         .fillMaxWidth()
                         .height(172.dp)
                 ) {
-                    if (decision.mode == DrsMode.BALL_TRACKING) {
-                        HawkEyeBallTrackingCanvas(
+                    when (decision.mode) {
+                        DrsMode.BALL_TRACKING -> HawkEyeBallTrackingCanvas(
                             decision = decision,
                             progress = p,
                             finalOut = finalOut,
                             modifier = Modifier.fillMaxSize()
                         )
-                    } else {
-                        UltraEdgeWaveformCanvas(
+                        DrsMode.WIDE_LINE_CHECK -> WideLineCheckCanvas(
+                            isWideFinal = finalExtra,
+                            progress = p,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                        DrsMode.NO_BALL_CHECK -> NoBallCheckCanvas(
+                            isNoBallFinal = finalExtra,
+                            progress = p,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                        DrsMode.ULTRA_EDGE -> UltraEdgeWaveformCanvas(
                             spikeIntensity = decision.spikeIntensity,
                             progress = p,
                             modifier = Modifier.fillMaxSize()
@@ -207,13 +228,22 @@ fun DrsReviewOverlay(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     DrsCheckChip(
-                        title = if (decision.mode == DrsMode.BALL_TRACKING) "PITCHING" else "AUDIO",
+                        title = when (decision.mode) {
+                            DrsMode.BALL_TRACKING -> "PITCHING"
+                            DrsMode.WIDE_LINE_CHECK -> "TRAMLINE"
+                            DrsMode.NO_BALL_CHECK -> "LINE / HEIGHT"
+                            DrsMode.ULTRA_EDGE -> "AUDIO"
+                        },
                         value = if (p >= 0.30f) decision.pitchingLabel else "...",
                         accent = if (p >= 0.30f) TurfEmerald else BroadcastMuted,
                         modifier = Modifier.weight(1f)
                     )
                     DrsCheckChip(
-                        title = if (decision.mode == DrsMode.BALL_TRACKING) "IMPACT" else "BAT EDGE",
+                        title = when (decision.mode) {
+                            DrsMode.BALL_TRACKING -> "IMPACT"
+                            DrsMode.WIDE_LINE_CHECK, DrsMode.NO_BALL_CHECK -> "SYSTEM"
+                            DrsMode.ULTRA_EDGE -> "BAT EDGE"
+                        },
                         value = if (p >= 0.62f) decision.impactLabel else "...",
                         accent = if (p >= 0.62f) {
                             if (decision.impactLabel.contains("OUTSIDE", true) || decision.impactLabel.contains("NO", true)) TurfEmerald else AuctionGold
@@ -226,7 +256,7 @@ fun DrsReviewOverlay(
                         accent = if (p >= 0.90f) {
                             when {
                                 decision.wicketsLabel.contains("HITTING", true) || decision.wicketsLabel.contains("OUT", true) -> WicketCrimson
-                                decision.wicketsLabel.contains("UMPIRE", true) -> AuctionGold
+                                decision.wicketsLabel.contains("WIDE", true) || decision.wicketsLabel.contains("NO-BALL", true) || decision.wicketsLabel.contains("UMPIRE", true) -> AuctionGold
                                 else -> TurfEmerald
                             }
                         } else BroadcastMuted,
@@ -522,3 +552,114 @@ private fun UltraEdgeWaveformCanvas(
         drawCircle(color = BroadcastWhite, radius = 4f, center = Offset(headX, midY))
     }
 }
+
+@Composable
+private fun WideLineCheckCanvas(
+    isWideFinal: Boolean,
+    progress: Float,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val cx = w * 0.5f
+
+        drawRect(Brush.verticalGradient(listOf(Color(0xFF0A1D2F), Color(0xFF103F2E))))
+        // Pitch rectangle
+        drawRect(
+            color = Color(0xFFD2B48C).copy(alpha = 0.85f),
+            topLeft = Offset(w * 0.22f, h * 0.14f),
+            size = Size(w * 0.56f, h * 0.78f)
+        )
+        // Popping crease
+        val creaseY = h * 0.66f
+        drawLine(BroadcastWhite, Offset(w * 0.16f, creaseY), Offset(w * 0.84f, creaseY), strokeWidth = 3.5f)
+        // Wide guideline tramlines (blue dashed)
+        val leftTramX = w * 0.30f
+        val rightTramX = w * 0.70f
+        drawLine(
+            color = BoundarySky,
+            start = Offset(leftTramX, h * 0.16f),
+            end = Offset(leftTramX, h * 0.90f),
+            strokeWidth = 3f,
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f))
+        )
+        drawLine(
+            color = BoundarySky,
+            start = Offset(rightTramX, h * 0.16f),
+            end = Offset(rightTramX, h * 0.90f),
+            strokeWidth = 3f,
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f))
+        )
+        // Stumps at center
+        for (i in -1..1) {
+            drawLine(BroadcastWhite, Offset(cx + i * 10f, creaseY), Offset(cx + i * 10f, creaseY - 26f), strokeWidth = 3.5f)
+        }
+        // Animated ball crossing crease inside or outside the wide guideline
+        val targetX = if (isWideFinal) rightTramX + w * 0.065f else rightTramX - w * 0.045f
+        val ballStart = Offset(cx + 12f, h * 0.16f)
+        val ballEnd = Offset(targetX, creaseY)
+        val cur = Offset(
+            ballStart.x + (ballEnd.x - ballStart.x) * progress.coerceIn(0f, 1f),
+            ballStart.y + (ballEnd.y - ballStart.y) * progress.coerceIn(0f, 1f)
+        )
+        val lineCol = if (isWideFinal) AuctionGold else TurfEmerald
+        drawLine(lineCol, ballStart, cur, strokeWidth = 4.5f, cap = StrokeCap.Round)
+        drawCircle(lineCol.copy(alpha = 0.35f), radius = 14f, center = cur)
+        drawCircle(BroadcastWhite, radius = 6.5f, center = cur)
+    }
+}
+
+@Composable
+private fun NoBallCheckCanvas(
+    isNoBallFinal: Boolean,
+    progress: Float,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        drawRect(Brush.verticalGradient(listOf(Color(0xFF0A192A), Color(0xFF1A2A3B))))
+        // Pitch ground
+        val groundY = h * 0.78f
+        drawRect(Color(0xFFCFA97E), topLeft = Offset(0f, groundY), size = Size(w, h - groundY))
+
+        // Popping crease vertical laser line
+        val creaseX = w * 0.56f
+        drawLine(
+            color = BroadcastWhite,
+            start = Offset(creaseX, h * 0.15f),
+            end = Offset(creaseX, h * 0.95f),
+            strokeWidth = 4f
+        )
+        // Waist-height horizontal reference line
+        val waistY = h * 0.44f
+        drawLine(
+            color = BoundarySky.copy(alpha = 0.7f),
+            start = Offset(w * 0.10f, waistY),
+            end = Offset(w * 0.90f, waistY),
+            strokeWidth = 2.2f,
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f))
+        )
+
+        // Bowler front-foot landing marker sliding toward crease
+        val footStart = w * 0.22f
+        val footTarget = if (isNoBallFinal) creaseX + 26f else creaseX - 10f
+        val footX = footStart + (footTarget - footStart) * progress.coerceIn(0f, 1f)
+        val statusColor = if (isNoBallFinal) WicketCrimson else TurfEmerald
+
+        // Stylized shoe silhouette
+        drawRoundRect(
+            color = statusColor,
+            topLeft = Offset(footX - 38f, groundY - 22f),
+            size = Size(54f, 22f),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(10f, 10f)
+        )
+        // High-speed laser check halo at crease
+        if (progress > 0.75f) {
+            drawCircle(statusColor.copy(alpha = 0.30f), radius = 26f, center = Offset(creaseX, groundY - 6f))
+            drawLine(statusColor, Offset(creaseX, h * 0.15f), Offset(creaseX, h * 0.95f), strokeWidth = 5f)
+        }
+    }
+}
+

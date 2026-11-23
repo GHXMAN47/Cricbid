@@ -34,6 +34,7 @@ class LocalTrophyCabinetStore(context: Context) {
                             orangeCapWinner = item.optString("orangeCapWinner"),
                             purpleCapWinner = item.optString("purpleCapWinner"),
                             mvpWinner = item.optString("mvpWinner"),
+                            emergingPlayerWinner = item.optString("emergingPlayerWinner"),
                             timestampMs = item.optLong("timestampMs", 0L)
                         )
                     )
@@ -103,6 +104,7 @@ class LocalTrophyCabinetStore(context: Context) {
                     put("orangeCapWinner", t.orangeCapWinner)
                     put("purpleCapWinner", t.purpleCapWinner)
                     put("mvpWinner", t.mvpWinner)
+                    put("emergingPlayerWinner", t.emergingPlayerWinner)
                     put("timestampMs", t.timestampMs)
                 }
             )
@@ -133,6 +135,7 @@ class LocalTrophyCabinetStore(context: Context) {
                             orangeCapWinner = item.optString("orangeCapWinner"),
                             purpleCapWinner = item.optString("purpleCapWinner"),
                             mvpWinner = item.optString("mvpWinner"),
+                            emergingPlayerWinner = item.optString("emergingPlayerWinner"),
                             timestampMs = item.optLong("timestampMs", 0L)
                         )
                     )
@@ -164,6 +167,7 @@ class LocalTrophyCabinetStore(context: Context) {
                         put("orangeCapWinner", t.orangeCapWinner)
                         put("purpleCapWinner", t.purpleCapWinner)
                         put("mvpWinner", t.mvpWinner)
+                        put("emergingPlayerWinner", t.emergingPlayerWinner)
                         put("timestampMs", t.timestampMs)
                     }
                 )

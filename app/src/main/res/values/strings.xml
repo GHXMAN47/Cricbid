@@ -24,4 +24,6 @@
     <string name="career_mode_title">Career Mode</string>
     <string name="career_mode_subtitle">Road to Legend • Domestic → IPL Auction → Intl Captain → Hall of Fame</string>
     <string name="career_difficulty_label">Career Difficulty</string>
+    <string name="ipl_mode_title">Indian Premier League 2026</string>
+    <string name="ipl_mode_subtitle">10 Official Franchises • ₹120 Cr Mega Auction • 70 Matches • Top-4 Playoffs</string>
 </resources>

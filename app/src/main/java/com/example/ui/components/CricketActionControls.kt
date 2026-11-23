@@ -90,6 +90,8 @@ fun LeftThumbControlPod(
     batterConfidence: Int = 45,
     bowlerStamina: Int = 100,
     dewActive: Boolean = false,
+    bouncersThisOver: Int = 0,
+    isFreeHit: Boolean = false,
     careerPlayerName: String? = null,
     careerControlMode: CareerControlMode = CareerControlMode.FULL_TEAM,
     compact: Boolean = false,
@@ -255,10 +257,11 @@ fun LeftThumbControlPod(
                     }
                 )
                 val effSpeed = selectedDelivery.effectiveSpeedKph(bowlerStamina, dewActive)
+                val bouncerStatus = if (bouncersThisOver >= 2) " • ⚠ 2/2 BNCR (3RD=NB)" else " • BNCR $bouncersThisOver/2"
                 Text(
-                    text = "DELIVERY • $effSpeed KPH${if (dewActive) " • DEW" else ""}",
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, letterSpacing = 0.6.sp),
-                    color = BoundarySky,
+                    text = "DELIVERY • $effSpeed KPH$bouncerStatus${if (isFreeHit) " • FREE HIT" else ""}",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, letterSpacing = 0.5.sp),
+                    color = if (bouncersThisOver >= 2 || isFreeHit) AuctionGold else BoundarySky,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -276,9 +279,9 @@ fun LeftThumbControlPod(
                             .testTag("delivery_yorker")
                     )
                     ThumbChoiceButton(
-                        label = DeliveryType.BOUNCER.shortLabel,
+                        label = if (bouncersThisOver >= 2) "BOUNCER (NB!)" else "BOUNCER ($bouncersThisOver/2)",
                         selected = selectedDelivery == DeliveryType.BOUNCER,
-                        accent = AuctionGold,
+                        accent = if (bouncersThisOver >= 2) WicketCrimson else AuctionGold,
                         onClick = { onSelectDelivery(DeliveryType.BOUNCER) },
                         modifier = Modifier
                             .weight(1f)

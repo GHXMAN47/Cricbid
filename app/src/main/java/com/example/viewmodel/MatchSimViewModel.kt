@@ -73,7 +73,10 @@ class MatchSimViewModel : ViewModel() {
         userTeamId: String? = null,
         careerPlayerId: String? = null,
         careerPlayerName: String? = null,
-        careerControlMode: CareerControlMode = if (careerPlayerId != null) CareerControlMode.PLAYER_ONLY else CareerControlMode.FULL_TEAM
+        careerControlMode: CareerControlMode = if (careerPlayerId != null) CareerControlMode.PLAYER_ONLY else CareerControlMode.FULL_TEAM,
+        isIplRules: Boolean = false,
+        teamAImpactNominees: List<String>? = null,
+        teamBImpactNominees: List<String>? = null
     ) {
         stopAutoPlay()
         stopSkippedPhaseAutoSim()
@@ -82,7 +85,10 @@ class MatchSimViewModel : ViewModel() {
             teamB = teamB,
             stage = stage,
             format = format,
-            teamBRatingOffset = opponentRatingOffset
+            teamBRatingOffset = opponentRatingOffset,
+            isIplRules = isIplRules,
+            teamAImpactNominees = teamAImpactNominees,
+            teamBImpactNominees = teamBImpactNominees
         )
         val resolvedUserTeamId = InteractivePhaseResolver.resolveUserTeamId(initial, userTeamId)
         val resolvedFilter = if (careerPlayerId != null && careerControlMode == CareerControlMode.PLAYER_ONLY) {
@@ -103,6 +109,50 @@ class MatchSimViewModel : ViewModel() {
             careerControlMode = if (careerPlayerId != null) careerControlMode else CareerControlMode.FULL_TEAM,
             autoJumpLandscapeSignal = 0L
         )
+    }
+
+    fun updateImpactNominees(teamId: String, nomineeIds: List<String>) {
+        val current = _uiState.value.match ?: return
+        val updated = MatchSimulationEngine.updateImpactNominees(current, teamId, nomineeIds)
+        _uiState.update {
+            it.copy(
+                match = updated,
+                statusNotice = "5 Impact Player substitutes nominated!"
+            )
+        }
+    }
+
+    fun resolveStrategicTimeout(tacticalBoost: String = "SKIP") {
+        val current = _uiState.value.match ?: return
+        val updated = MatchSimulationEngine.resolveStrategicTimeout(current, tacticalBoost)
+        _uiState.update {
+            it.copy(
+                match = updated,
+                statusNotice = updated.commentaryFeed.firstOrNull()?.commentary
+            )
+        }
+    }
+
+    fun confirmSuperOverNomination(
+        teamId: String,
+        batterIds: List<String>,
+        bowlerId: String,
+        onFinished: ((LiveMatchState) -> Unit)? = null
+    ) {
+        val current = _uiState.value.match ?: return
+        MatchSimulationEngine.confirmSuperOverNomination(current, teamId, batterIds, bowlerId)
+            .onSuccess { updated ->
+                _uiState.update {
+                    it.copy(
+                        match = updated,
+                        statusNotice = "🔥 Super Over #${updated.superOverRound} lineup locked!"
+                    )
+                }
+                triggerSkippedPhaseAutoSimIfNeeded(onFinished)
+            }
+            .onFailure { err ->
+                _uiState.update { it.copy(statusNotice = err.message ?: "Invalid Super Over nomination") }
+            }
     }
 
     fun confirmPlayModeSetup(
@@ -612,7 +662,11 @@ class MatchSimViewModel : ViewModel() {
     ) {
         val currentState = _uiState.value
         val currentMatch = currentState.match ?: return
-        if (currentState.showPlayModeSetup || currentMatch.finished) {
+        if (currentState.showPlayModeSetup ||
+            currentMatch.finished ||
+            currentMatch.pendingStrategicTimeout != null ||
+            currentMatch.awaitingSuperOverNomination
+        ) {
             stopSkippedPhaseAutoSim()
             return
         }
@@ -769,6 +823,28 @@ class MatchSimViewModel : ViewModel() {
             state.copy(
                 match = state.match?.copy(savedToCloud = true),
                 statusNotice = "${current.format.shortLabel} result recorded!"
+            )
+        }
+    }
+
+    fun persistIplSeasonResultIfNeeded(
+        seasonYear: Int,
+        matchNumber: Int,
+        currentUid: String,
+        onSaveRecord: (com.example.data.model.MatchRecord) -> Unit
+    ) {
+        val current = _uiState.value.match ?: return
+        if (!current.finished || current.savedToCloud || _uiState.value.savingResult) return
+        val record = current.toMatchRecord(
+            roomCode = "IPL_${seasonYear}_M$matchNumber",
+            hostUid = currentUid,
+            memberUids = listOf(currentUid)
+        ).copy(id = "ipl_${seasonYear}_m${matchNumber}_${System.currentTimeMillis()}")
+        onSaveRecord(record)
+        _uiState.update { state ->
+            state.copy(
+                match = state.match?.copy(savedToCloud = true),
+                statusNotice = "IPL Match #$matchNumber result synced to Points Table!"
             )
         }
     }

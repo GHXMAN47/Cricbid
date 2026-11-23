@@ -152,6 +152,8 @@ fun MatchSimScreen(
     autoJumpLandscapeSignal: Long = 0L,
     onChangeCareerControlMode: (CareerControlMode) -> Unit = {},
     onSkipToMyTurn: () -> Unit = {},
+    onResolveStrategicTimeout: (String) -> Unit = {},
+    onConfirmSuperOverNomination: (teamId: String, batterIds: List<String>, bowlerId: String) -> Unit = { _, _, _ -> },
     modifier: Modifier = Modifier
 ) {
     BackHandler(onBack = onBack)
@@ -713,6 +715,26 @@ fun MatchSimScreen(
             )
         }
 
+        // IPL Strategic Time-Out Brief Skippable Tactical Card
+        val timeoutPrompt = match.pendingStrategicTimeout
+        if (timeoutPrompt != null && !match.finished) {
+            StrategicTimeoutOverlay(
+                prompt = timeoutPrompt,
+                onResolve = onResolveStrategicTimeout
+            )
+        }
+
+        // Unlimited Super Over 3-Batter + 1-Bowler Nomination Overlay (strictly blocks previous dismissed/bowler)
+        if (match.awaitingSuperOverNomination && match.isSuperOverActive && !match.finished) {
+            SuperOverNominationOverlay(
+                match = match,
+                userTeamId = resolvedUserTeamId,
+                onConfirm = { teamId, batterIds, bowlerId ->
+                    onConfirmSuperOverNomination(teamId, batterIds, bowlerId)
+                }
+            )
+        }
+
         // Manual Bowler Selection Sheet (strict 4-over cap & no consecutive overs)
         if (showBowlerSheet && canPickBowler) {
             BowlerPickerBottomSheet(
@@ -853,12 +875,27 @@ private fun ImpactSubBottomSheet(
 ) {
     val defaultTeam = if (!match.teamAImpactUsed && match.teamA.benchPlayers.isNotEmpty()) match.teamA else match.teamB
     var selectedTeamId by remember { mutableStateOf(defaultTeam.teamId) }
-    val selectedTeam = if (selectedTeamId == match.teamA.teamId) match.teamA else match.teamB
-    val teamAlreadyUsed = if (selectedTeamId == match.teamA.teamId) match.teamAImpactUsed else match.teamBImpactUsed
-    val bench = selectedTeam.benchPlayers
-    val activeXi = if (selectedTeamId == match.teamA.teamId) match.innings1.battingLineup else match.innings2.battingLineup
+    val isTeamA = selectedTeamId == match.teamA.teamId
+    val selectedTeam = if (isTeamA) match.teamA else match.teamB
+    val teamAlreadyUsed = if (isTeamA) match.teamAImpactUsed else match.teamBImpactUsed
+    val nominatedIds = if (isTeamA) match.teamAImpactNominees else match.teamBImpactNominees
+    val startingOsCount = if (isTeamA) match.teamAStartingOverseasCount else match.teamBStartingOverseasCount
+    val rawBench = selectedTeam.benchPlayers
+    val bench = if (match.isIplRules && nominatedIds.isNotEmpty()) {
+        rawBench.filter { it.id in nominatedIds }.ifEmpty { rawBench.take(5) }
+    } else {
+        rawBench
+    }
+    val activeXi = if (isTeamA) match.innings1.battingLineup else match.innings2.battingLineup
+    val windowOpen = !match.isIplRules || MatchSimulationEngine.isImpactSubWindowOpen(match)
+    val overseasBlockedByIpl = match.isIplRules && startingOsCount >= 4
 
-    var selectedBenchId by remember(selectedTeamId) { mutableStateOf(bench.firstOrNull()?.id ?: "") }
+    var selectedBenchId by remember(selectedTeamId) {
+        mutableStateOf(
+            bench.firstOrNull { !overseasBlockedByIpl || !it.overseas }?.id
+                ?: bench.firstOrNull()?.id.orEmpty()
+        )
+    }
     var selectedOutId by remember(selectedTeamId) { mutableStateOf(activeXi.lastOrNull()?.id ?: "") }
 
     ModalBottomSheet(
@@ -873,14 +910,33 @@ private fun ImpactSubBottomSheet(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text(
-                text = "⚡ IPL IMPACT PLAYER RULE (1 SUB)",
+                text = "⚡ IPL IMPACT PLAYER RULE (5 NOMINEES • 1 SUB)",
                 style = MaterialTheme.typography.headlineSmall.copy(fontFamily = DisplayFontFamily, color = BoundarySky)
             )
             Text(
-                text = "Swap 1 bench player into the match XI (respecting max 4 overseas rule).",
+                text = if (overseasBlockedByIpl) {
+                    "Starting XI already has 4 Overseas players — ONLY an Indian Impact Player may enter."
+                } else {
+                    "Starting XI has $startingOsCount Overseas — Indian or Overseas Impact Player allowed!"
+                },
                 style = MaterialTheme.typography.bodySmall,
-                color = BroadcastSilver
+                color = if (overseasBlockedByIpl) AuctionGold else TurfEmerald
             )
+            if (!windowOpen) {
+                Surface(
+                    color = WicketCrimson.copy(alpha = 0.16f),
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, WicketCrimson.copy(alpha = 0.6f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "⏳ Mid-over: Impact Player can only enter before an innings, at the end of an over, at a wicket, or after a retirement.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = WicketCrimson,
+                        modifier = Modifier.padding(10.dp)
+                    )
+                }
+            }
 
             // Team switcher
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -913,25 +969,45 @@ private fun ImpactSubBottomSheet(
                     modifier = Modifier.padding(vertical = 12.dp)
                 )
             } else {
-                Text("IMPACT PLAYER IN (BENCH)", style = MaterialTheme.typography.labelSmall, color = TurfEmerald)
+                Text("NOMINATED IMPACT SUBS (${bench.size}/5)", style = MaterialTheme.typography.labelSmall, color = TurfEmerald)
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(bench, key = { it.id }) { p ->
-                        val chosen = p.id == selectedBenchId
+                        val blocked = overseasBlockedByIpl && p.overseas
+                        val chosen = p.id == selectedBenchId && !blocked
                         Surface(
-                            color = if (chosen) TurfEmerald.copy(alpha = 0.2f) else NavySurfaceHigh,
+                            color = when {
+                                blocked -> NavySurfaceHigh.copy(alpha = 0.4f)
+                                chosen -> TurfEmerald.copy(alpha = 0.2f)
+                                else -> NavySurfaceHigh
+                            },
                             shape = RoundedCornerShape(10.dp),
-                            border = BorderStroke(1.2.dp, if (chosen) TurfEmerald else NavyOutline),
+                            border = BorderStroke(
+                                1.2.dp,
+                                when {
+                                    blocked -> WicketCrimson.copy(alpha = 0.4f)
+                                    chosen -> TurfEmerald
+                                    else -> NavyOutline
+                                }
+                            ),
                             modifier = Modifier
                                 .clip(RoundedCornerShape(10.dp))
-                                .clickable { selectedBenchId = p.id }
+                                .clickable(enabled = !blocked) { selectedBenchId = p.id }
+                                .testTag("impact_nominee_${p.id}")
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Text(p.name, style = MaterialTheme.typography.labelMedium, color = BroadcastWhite)
+                                Text(
+                                    text = if (p.overseas) "${p.name} ✈" else p.name,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = if (blocked) BroadcastMuted else BroadcastWhite
+                                )
                                 RolePillBadge(role = p.role)
+                                if (blocked) {
+                                    Text("4-OS CAP", style = MaterialTheme.typography.labelSmall, color = WicketCrimson)
+                                }
                             }
                         }
                     }
@@ -961,13 +1037,15 @@ private fun ImpactSubBottomSheet(
                     }
                 }
 
+                val selectedBenchObj = bench.firstOrNull { it.id == selectedBenchId }
+                val subReady = windowOpen && selectedBenchObj != null && !(overseasBlockedByIpl && selectedBenchObj.overseas) && selectedOutId.isNotBlank()
                 Button(
+                    enabled = subReady,
                     onClick = {
                         if (selectedBenchId.isNotBlank() && selectedOutId.isNotBlank()) {
                             onConfirmSub(selectedTeam.teamId, selectedBenchId, selectedOutId)
                         }
                     },
-                    enabled = selectedBenchId.isNotBlank() && selectedOutId.isNotBlank(),
                     colors = ButtonDefaults.buttonColors(containerColor = BoundarySky, contentColor = NavyMidnight),
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier

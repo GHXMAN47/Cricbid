@@ -172,19 +172,68 @@ enum class FieldPreset(
         )
     );
 
+    /**
+     * Enforces official fielding circle restrictions (e.g., max 2 outside 30-yard circle in Powerplay
+     * overs 1-6, max 5 outside in overs 7-20, max 4 outside under Slow Over-Rate Penalty).
+     * Pulls excess deep fielders inside the 30-yard ring ellipse centered at (0.50, 0.58) with rx=0.31, ry=0.30.
+     */
+    fun coordsForCircleLimit(maxOutsideCircle: Int): List<Pair<Float, Float>> {
+        val cap = maxOutsideCircle.coerceIn(0, 9)
+        val cx = 0.50f
+        val cy = 0.58f
+        val rx = 0.30f
+        val ry = 0.29f
+        var outsideUsed = 0
+        return fielderCoords.map { (x, y) ->
+            val dx = (x - cx) / rx
+            val dy = (y - cy) / ry
+            val normDistSq = dx * dx + dy * dy
+            if (normDistSq <= 1.0f) {
+                x to y
+            } else if (outsideUsed < cap) {
+                outsideUsed++
+                x to y
+            } else {
+                // Pull fielder cleanly inside the 30-yard ring along the same angle
+                val scale = 0.80f / kotlin.math.sqrt(normDistSq)
+                (cx + (x - cx) * scale) to (cy + (y - cy) * scale)
+            }
+        }
+    }
+
+    fun countOutsideCircle(coords: List<Pair<Float, Float>>): Int {
+        val cx = 0.50f
+        val cy = 0.58f
+        val rx = 0.30f
+        val ry = 0.29f
+        return coords.count { (x, y) ->
+            val dx = (x - cx) / rx
+            val dy = (y - cy) / ry
+            (dx * dx + dy * dy) > 1.0f
+        }
+    }
+
     companion object {
         fun fromNameSafe(raw: String?): FieldPreset =
             entries.firstOrNull { it.name == raw } ?: BALANCED
     }
 }
 
+enum class DrsReviewType {
+    DISMISSAL,
+    WIDE_CALL,
+    NO_BALL_CALL
+}
+
 enum class DrsMode(val label: String) {
     BALL_TRACKING("HAWK-EYE BALL TRACKING"),
-    ULTRA_EDGE("ULTRAEDGE SNICKO")
+    ULTRA_EDGE("ULTRAEDGE SNICKO"),
+    WIDE_LINE_CHECK("WIDE TRAMLINE & HEIGHT CHECK"),
+    NO_BALL_CHECK("FRONT-FOOT / WAIST NO-BALL CHECK")
 }
 
 /**
- * Represents a close LBW or Caught-Behind decision eligible for DRS review.
+ * Represents a close LBW, Caught-Behind, Wide, or No-Ball decision eligible for DRS review.
  */
 data class DrsPendingDecision(
     val decisionId: Long,
@@ -206,7 +255,21 @@ data class DrsPendingDecision(
     val ballPitchX: Float,     // -1f (off) .. 1f (leg)
     val ballPitchY: Float,     // 0f (yorker) .. 1f (short)
     val inningsNumber: Int,
-    val overLabel: String
+    val overLabel: String,
+    val reviewType: DrsReviewType = DrsReviewType.DISMISSAL,
+    val originalExtraCalled: Boolean = false
+)
+
+enum class StrategicTimeoutSide(val label: String, val windowLabel: String) {
+    BOWLING_SIDE("Bowling Team Strategic Time-Out", "Overs 6–9 Window"),
+    BATTING_SIDE("Batting Team Strategic Time-Out", "Overs 13–16 Window")
+}
+
+data class StrategicTimeoutPrompt(
+    val side: StrategicTimeoutSide,
+    val inningsNumber: Int,
+    val overCompleted: Int,
+    val teamName: String
 )
 
 /**

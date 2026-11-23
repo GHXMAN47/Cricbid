@@ -225,7 +225,9 @@ object CricketerDatabase {
     val allPlayers: List<Cricketer>
         get() = if (hallOfFameLegends.isEmpty()) basePlayers else basePlayers + hallOfFameLegends
 
-    private val baseByIdMap: Map<String, Cricketer> = (basePlayers + internationalExtras).associateBy { it.id }
+    private val baseByIdMap: Map<String, Cricketer> by lazy {
+        (basePlayers + internationalExtras + Ipl2026Catalog.extraPlayers).associateBy { it.id }
+    }
 
     fun registerHallOfFameLegends(legends: List<Cricketer>) {
         hallOfFameLegends = legends.distinctBy { it.id }

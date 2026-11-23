@@ -85,6 +85,10 @@ fun CricketActionPitchCanvas(
     pitchType: PitchType = PitchType.BALANCED,
     dewActive: Boolean = false,
     fieldPreset: FieldPreset = FieldPreset.BALANCED,
+    maxFieldersOutsideCircle: Int = 5,
+    isPowerplay: Boolean = false,
+    isFreeHit: Boolean = false,
+    slowOverRatePenalty: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val haptic = LocalHapticFeedback.current
@@ -390,7 +394,7 @@ fun CricketActionPitchCanvas(
                 x = (cx + sin(ballHitRad).toFloat() * w * 0.34f).coerceIn(w * 0.12f, w * 0.88f),
                 y = (nearCreaseY - cos(ballHitRad).toFloat() * h * 0.44f).coerceIn(h * 0.20f, h * 0.76f)
             )
-            val dynamicOutfielders = fieldPreset.fielderCoords.map { (fx, fy) ->
+            val dynamicOutfielders = fieldPreset.coordsForCircleLimit(maxFieldersOutsideCircle).map { (fx, fy) ->
                 Offset(w * fx, h * fy)
             }
             dynamicOutfielders.forEach { base ->
@@ -595,6 +599,29 @@ fun CricketActionPitchCanvas(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+            }
+            val ruleBadge = when {
+                isFreeHit -> "🔥 FREE HIT!" to AuctionGold
+                slowOverRatePenalty -> "⚠ OVER-RATE: MAX 4 OUT" to WicketCrimson
+                isPowerplay -> "PP • MAX 2 OUT" to BoundarySky
+                else -> "MAX $maxFieldersOutsideCircle OUT" to TurfEmerald
+            }
+            Surface(
+                color = NavyMidnight.copy(alpha = 0.80f),
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(1.dp, ruleBadge.second.copy(alpha = 0.7f)),
+                modifier = Modifier.testTag("field_circle_rule_badge")
+            ) {
+                Text(
+                    text = ruleBadge.first,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 10.sp
+                    ),
+                    color = ruleBadge.second,
+                    maxLines = 1,
+                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
                 )
             }
         }

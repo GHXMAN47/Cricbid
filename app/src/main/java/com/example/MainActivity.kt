@@ -63,6 +63,7 @@ import com.example.data.local.AccountProfile
 import com.example.data.local.LocalAuctionRepository
 import com.example.data.local.LocalCareerStore
 import com.example.data.local.LocalInternationalStore
+import com.example.data.local.LocalIplSeasonStore
 import com.example.data.local.LocalMatchResumeStore
 import com.example.data.local.LocalProfileStore
 import com.example.data.local.LocalSaveBackupManager
@@ -78,6 +79,7 @@ import com.example.engine.TrophyCabinetRecord
 import com.example.ui.screens.CareerScreen
 import com.example.ui.screens.HomeLobbyScreen
 import com.example.ui.screens.InternationalScreen
+import com.example.ui.screens.IplSeasonRootScreen
 import com.example.ui.screens.LiveAuctionScreen
 import com.example.ui.screens.MatchHubScreen
 import com.example.ui.screens.MatchSimScreen
@@ -102,6 +104,7 @@ import com.example.ui.theme.WicketCrimson
 import com.example.viewmodel.CareerViewModel
 import com.example.viewmodel.CricBidViewModel
 import com.example.viewmodel.InternationalViewModel
+import com.example.viewmodel.IplSeasonViewModel
 import com.example.viewmodel.MatchSimViewModel
 import com.google.firebase.auth.FirebaseAuth
 
@@ -555,8 +558,22 @@ private fun CricBidArenaFlow(
         }
     )
 
+    val iplSeasonViewModel: IplSeasonViewModel = viewModel(
+        key = "ipl_season_$sessionKey",
+        factory = viewModelFactory {
+            initializer {
+                val app = checkNotNull(this[APPLICATION_KEY]) {
+                    "APPLICATION_KEY missing from CreationExtras"
+                }
+                IplSeasonViewModel(store = LocalIplSeasonStore(app))
+            }
+        }
+    )
+
     var inInternationalHub by rememberSaveable { mutableStateOf(false) }
     var inCareerMode by rememberSaveable { mutableStateOf(false) }
+    var inIplMode by rememberSaveable { mutableStateOf(false) }
+    var activeIplFixtureNumber by rememberSaveable { mutableStateOf<Int?>(null) }
     var inProfileScreen by rememberSaveable { mutableStateOf(false) }
     var showTrophyCabinet by rememberSaveable { mutableStateOf(false) }
     var trophyCabinetInitialTab by rememberSaveable { mutableIntStateOf(0) }
@@ -580,9 +597,13 @@ private fun CricBidArenaFlow(
     val matchSimState by matchSimViewModel.uiState.collectAsStateWithLifecycle()
     val internationalState by internationalViewModel.uiState.collectAsStateWithLifecycle()
     val careerState by careerViewModel.uiState.collectAsStateWithLifecycle()
+    val iplSeasonState by iplSeasonViewModel.uiState.collectAsStateWithLifecycle()
 
     val iplLeaderboards = remember(activeState.matches) {
         SeasonAwardsEngine.buildLeaderboards(activeState.matches)
+    }
+    val iplSeasonLeaderboards = remember(iplSeasonState.season?.schedule, iplSeasonState.season?.playoffs) {
+        SeasonAwardsEngine.buildLeaderboards(iplSeasonState.season?.allCompletedMatches.orEmpty())
     }
     val intlLeaderboards = remember(
         internationalState.campaign.worldCupMatches,
@@ -603,6 +624,7 @@ private fun CricBidArenaFlow(
         matchSimState.careerControlMode,
         activeMatchIsInternational,
         activeCareerMatchType,
+        activeIplFixtureNumber,
         activeState.activeRoomCode
     ) {
         val m = matchSimState.match
@@ -612,6 +634,7 @@ private fun CricBidArenaFlow(
                 savedMatchSnapshot = null
             } else if (!matchSimState.showPlayModeSetup || m.innings1.legalBalls > 0 || m.innings2.legalBalls > 0) {
                 val src = when {
+                    activeIplFixtureNumber != null -> SavedMatchSource.IPL_SEASON
                     activeCareerMatchType != null -> SavedMatchSource.CAREER
                     activeMatchIsInternational -> SavedMatchSource.INTERNATIONAL
                     else -> SavedMatchSource.IPL_ROOM
@@ -621,7 +644,7 @@ private fun CricBidArenaFlow(
                     userTeamId = matchSimState.userTeamId,
                     playFilter = matchSimState.playFilter,
                     source = src,
-                    roomCode = activeState.activeRoomCode,
+                    roomCode = if (activeIplFixtureNumber != null) activeIplFixtureNumber.toString() else activeState.activeRoomCode,
                     careerMatchType = activeCareerMatchType,
                     careerPlayerId = matchSimState.careerPlayerId,
                     careerPlayerName = matchSimState.careerPlayerName,
@@ -674,6 +697,14 @@ private fun CricBidArenaFlow(
         }
     }
 
+    LaunchedEffect(iplSeasonState.snackbarMessage) {
+        val msg = iplSeasonState.snackbarMessage
+        if (!msg.isNullOrBlank()) {
+            snackbarHostState.showSnackbar(msg)
+            iplSeasonViewModel.consumeSnackbar()
+        }
+    }
+
     Scaffold(
         containerColor = NavyMidnight,
         contentWindowInsets = WindowInsets.safeDrawing,
@@ -687,6 +718,85 @@ private fun CricBidArenaFlow(
         val activeRoom = activeState.room
 
         when {
+            // 0. Live IPL 2026 Official Mode Ball-by-Ball Match Simulation (Full Official IPL Rules)
+            activeMatch != null && activeIplFixtureNumber != null -> {
+                val fixtureNum = activeIplFixtureNumber!!
+                val seasonYear = iplSeasonState.season?.seasonYear ?: 2026
+                val onFinishIplMatch: () -> Unit = {
+                    matchSimViewModel.persistIplSeasonResultIfNeeded(
+                        seasonYear = seasonYear,
+                        matchNumber = fixtureNum,
+                        currentUid = currentUserId,
+                        onSaveRecord = { rec ->
+                            val humanIds = iplSeasonState.season?.humanFranchiseIds.orEmpty()
+                            val won = rec.winnerTeamId in humanIds
+                            val wonTrophy = won && rec.matchStage == MatchStage.FINAL
+                            onRecordMatchOutcome(won, wonTrophy)
+                            iplSeasonViewModel.recordMatchCompleted(
+                                matchNumber = fixtureNum,
+                                record = rec,
+                                onSeasonTrophyWon = { trophy ->
+                                    if (trophyCabinetStore != null) {
+                                        trophyCabinetData = trophyCabinetStore.recordFinalOutcome(trophy)
+                                    }
+                                }
+                            )
+                        }
+                    )
+                }
+                LaunchedEffect(activeMatch.finished) {
+                    if (activeMatch.finished) onFinishIplMatch()
+                }
+                MatchSimScreen(
+                    match = activeMatch,
+                    autoPlaying = matchSimState.autoPlaying,
+                    speed = matchSimState.speed,
+                    onBack = {
+                        matchSimViewModel.closeMatch()
+                        activeIplFixtureNumber = null
+                    },
+                    onNextBall = { matchSimViewModel.nextBall { onFinishIplMatch() } },
+                    onNextOver = { matchSimViewModel.nextOver { onFinishIplMatch() } },
+                    onNextFiveOvers = { matchSimViewModel.nextFiveOvers { onFinishIplMatch() } },
+                    onSimInnings = { matchSimViewModel.simInnings { onFinishIplMatch() } },
+                    onSimFullMatch = { matchSimViewModel.simFullMatch { onFinishIplMatch() } },
+                    onToggleAutoPlay = { matchSimViewModel.toggleAutoPlay { onFinishIplMatch() } },
+                    onCycleSpeed = { matchSimViewModel.cycleSpeed() },
+                    onApplyImpactSub = { teamId, benchId, outId ->
+                        matchSimViewModel.applyImpactSub(teamId, benchId, outId)
+                    },
+                    onSelectBowler = { bowlerId ->
+                        matchSimViewModel.selectBowlerForNextOver(bowlerId)
+                    },
+                    lastActionSnapshot = matchSimState.lastActionSnapshot,
+                    onPlayInteractiveBall = { input ->
+                        matchSimViewModel.playInteractiveBall(input) { onFinishIplMatch() }
+                    },
+                    userTeamId = matchSimState.userTeamId,
+                    playFilter = matchSimState.playFilter,
+                    showPlayModeSetup = matchSimState.showPlayModeSetup,
+                    autoSimmingSkippedPhase = matchSimState.autoSimmingSkippedPhase,
+                    onConfirmPlayModeSetup = { filter, pitch, weather, dew, _ ->
+                        matchSimViewModel.confirmPlayModeSetup(filter, pitch, weather, dew) { onFinishIplMatch() }
+                    },
+                    onChangePlayFilter = { filter ->
+                        matchSimViewModel.setPlayFilter(filter) { onFinishIplMatch() }
+                    },
+                    showDrsOverlay = matchSimState.showDrsOverlay,
+                    onSelectFieldPreset = { preset -> matchSimViewModel.setFieldPreset(preset) },
+                    onStartDrsReview = { matchSimViewModel.startDrsReview() },
+                    onCompleteDrsReview = { matchSimViewModel.completeDrsReview { onFinishIplMatch() } },
+                    onDismissDrs = { matchSimViewModel.dismissDrs() },
+                    orangeCapPlayerId = iplSeasonLeaderboards.orangeCapPlayerId,
+                    purpleCapPlayerId = iplSeasonLeaderboards.purpleCapPlayerId,
+                    onResolveStrategicTimeout = { boost -> matchSimViewModel.resolveStrategicTimeout(boost) },
+                    onConfirmSuperOverNomination = { tid, bIds, bwId ->
+                        matchSimViewModel.confirmSuperOverNomination(tid, bIds, bwId) { onFinishIplMatch() }
+                    },
+                    modifier = contentModifier
+                )
+            }
+
             // 1. Live Career Mode Ball-by-Ball Match Simulation
             activeMatch != null && activeCareerMatchType != null -> {
                 val careerMatchType = activeCareerMatchType!!
@@ -776,6 +886,10 @@ private fun CricBidArenaFlow(
                     onStartDrsReview = { matchSimViewModel.startDrsReview() },
                     onCompleteDrsReview = { matchSimViewModel.completeDrsReview { onFinishCareerMatch() } },
                     onDismissDrs = { matchSimViewModel.dismissDrs() },
+                    onResolveStrategicTimeout = { boost -> matchSimViewModel.resolveStrategicTimeout(boost) },
+                    onConfirmSuperOverNomination = { tid, bIds, bwId ->
+                        matchSimViewModel.confirmSuperOverNomination(tid, bIds, bwId) { onFinishCareerMatch() }
+                    },
                     modifier = contentModifier
                 )
             }
@@ -864,6 +978,10 @@ private fun CricBidArenaFlow(
                     onDismissDrs = { matchSimViewModel.dismissDrs() },
                     orangeCapPlayerId = intlLeaderboards.orangeCapPlayerId,
                     purpleCapPlayerId = intlLeaderboards.purpleCapPlayerId,
+                    onResolveStrategicTimeout = { boost -> matchSimViewModel.resolveStrategicTimeout(boost) },
+                    onConfirmSuperOverNomination = { tid, bIds, bwId ->
+                        matchSimViewModel.confirmSuperOverNomination(tid, bIds, bwId) { onFinishInternational() }
+                    },
                     modifier = contentModifier
                 )
             }
@@ -957,19 +1075,26 @@ private fun CricBidArenaFlow(
                     onDismissDrs = { matchSimViewModel.dismissDrs() },
                     orangeCapPlayerId = iplLeaderboards.orangeCapPlayerId,
                     purpleCapPlayerId = iplLeaderboards.purpleCapPlayerId,
+                    onResolveStrategicTimeout = { boost -> matchSimViewModel.resolveStrategicTimeout(boost) },
+                    onConfirmSuperOverNomination = { tid, bIds, bwId ->
+                        matchSimViewModel.confirmSuperOverNomination(tid, bIds, bwId) { onFinishPersist() }
+                    },
                     modifier = contentModifier
                 )
             }
 
-            // 1C. Trophy Cabinet & Season Leaderboards (Orange Cap / Purple Cap / MVP)
+            // 1C. Trophy Cabinet & Season Leaderboards (Orange Cap / Purple Cap / MVP / Emerging Player)
             showTrophyCabinet -> {
                 val activeLb = when {
+                    inIplMode && iplSeasonLeaderboards.hasData -> iplSeasonLeaderboards
                     activeRoom != null -> iplLeaderboards
                     inInternationalHub -> intlLeaderboards
+                    iplSeasonLeaderboards.hasData -> iplSeasonLeaderboards
                     iplLeaderboards.hasData -> iplLeaderboards
                     else -> intlLeaderboards
                 }
                 val compTitle = when {
+                    inIplMode -> "IPL ${iplSeasonState.season?.seasonYear ?: 2026} Official Season"
                     activeRoom != null -> "IPL Season • Room ${activeRoom.roomCode}"
                     inInternationalHub -> "${internationalState.campaign.format.shortLabel} International Season"
                     else -> "Active Tournament Caps"
@@ -1032,6 +1157,8 @@ private fun CricBidArenaFlow(
                         inProfileScreen = false
                         inInternationalHub = false
                         inCareerMode = false
+                        inIplMode = false
+                        activeIplFixtureNumber = null
                         viewingStandingsMode = null
                         activeMatchIsInternational = false
                         activeCareerMatchType = null
@@ -1221,6 +1348,62 @@ private fun CricBidArenaFlow(
                 )
             }
 
+            // 2B-3. Dedicated Official Indian Premier League 2026 Mode (Solo & Friend Room)
+            inIplMode -> {
+                IplSeasonRootScreen(
+                    uiState = iplSeasonState,
+                    defaultManagerName = profile.username,
+                    onBackToHome = { inIplMode = false },
+                    onStartNewSeason = { mode, selections, code ->
+                        iplSeasonViewModel.startNewSeason(mode, selections, code)
+                    },
+                    onResetToSetup = { iplSeasonViewModel.resetToSetup() },
+                    onSelectActiveHuman = { fid -> iplSeasonViewModel.setActiveHumanFranchise(fid) },
+                    onSubmitRetentions = { fid, ids -> iplSeasonViewModel.submitRetentions(fid, ids) },
+                    onToggleAuctionPause = { iplSeasonViewModel.toggleAuctionPause() },
+                    onPlaceBid = { fid -> iplSeasonViewModel.placeBid(fid) },
+                    onTriggerHammerLoot = { fid -> iplSeasonViewModel.triggerHammerLoot(fid) },
+                    onUseRtm = { fid -> iplSeasonViewModel.useRtmCard(fid) },
+                    onPassLot = { fid -> iplSeasonViewModel.passCurrentLot(fid) },
+                    onFastForwardLot = { iplSeasonViewModel.fastFinishCurrentLot() },
+                    onAutoCompleteAuction = { iplSeasonViewModel.autoCompleteAuction() },
+                    onSavePlayingXi = { fid, xi, nominees, cap, enterLeague ->
+                        iplSeasonViewModel.savePlayingXi(fid, xi, nominees, cap, enterLeague)
+                    },
+                    onOpenXiEditorInSeason = { fid -> iplSeasonViewModel.openXiEditorInSeason(fid) },
+                    onCloseXiEditorInSeason = { iplSeasonViewModel.closeXiEditorInSeason() },
+                    onLaunchFixtureMatch = { fixture ->
+                        val season = iplSeasonState.season ?: return@IplSeasonRootScreen
+                        val fA = season.franchiseById(fixture.teamAId) ?: return@IplSeasonRootScreen
+                        val fB = season.franchiseById(fixture.teamBId) ?: return@IplSeasonRootScreen
+                        val userTid = when {
+                            fA.isHuman -> fA.franchiseId
+                            fB.isHuman -> fB.franchiseId
+                            else -> fA.franchiseId
+                        }
+                        activeIplFixtureNumber = fixture.matchNumber
+                        activeMatchIsInternational = false
+                        activeCareerMatchType = null
+                        matchSimViewModel.startNewMatch(
+                            teamA = fA.toTeamState(),
+                            teamB = fB.toTeamState(),
+                            stage = fixture.stage,
+                            format = com.example.data.model.MatchFormat.T20I,
+                            userTeamId = userTid,
+                            isIplRules = true,
+                            teamAImpactNominees = fA.impactNomineeIds,
+                            teamBImpactNominees = fB.impactNomineeIds
+                        )
+                    },
+                    onDismissAiResultsPopup = { iplSeasonViewModel.dismissAiResultsPopup() },
+                    onOpenTrophyCabinet = {
+                        trophyCabinetInitialTab = 0
+                        showTrophyCabinet = true
+                    },
+                    modifier = contentModifier
+                )
+            }
+
             // 2C. Home Room Creator / Joiner when no active room selected
             activeState.activeRoomCode == null -> {
                 val resumableAuctionRoom = remember(myRoomsState, lastActiveRoomCode) {
@@ -1244,6 +1427,7 @@ private fun CricBidArenaFlow(
                     onOpenRoom = { code -> viewModel.openRoom(code) },
                     onOpenInternational = { inInternationalHub = true },
                     onOpenCareerMode = { inCareerMode = true },
+                    onOpenIplMode = { inIplMode = true },
                     onOpenProfile = { inProfileScreen = true },
                     onClearJoinStatus = { viewModel.clearJoinStatus() },
                     onConnectCloudSync = onConnectCloudSync,
@@ -1252,8 +1436,10 @@ private fun CricBidArenaFlow(
                         matchSimViewModel.closeMatch()
                         activeMatchIsInternational = false
                         activeCareerMatchType = null
+                        activeIplFixtureNumber = null
                         inInternationalHub = false
                         inCareerMode = false
+                        inIplMode = false
                         inProfileScreen = false
                         showTrophyCabinet = false
                         onDisconnectCloudSync()
@@ -1262,19 +1448,28 @@ private fun CricBidArenaFlow(
                     onResumeSavedMatch = {
                         val snap = savedMatchSnapshot ?: return@HomeLobbyScreen
                         when (snap.source) {
+                            SavedMatchSource.IPL_SEASON -> {
+                                activeIplFixtureNumber = snap.roomCode?.toIntOrNull() ?: 1
+                                activeMatchIsInternational = false
+                                activeCareerMatchType = null
+                                inIplMode = true
+                            }
                             SavedMatchSource.CAREER -> {
                                 activeCareerMatchType = snap.careerMatchType ?: CareerMatchType.IPL_T20
                                 activeMatchIsInternational = false
+                                activeIplFixtureNumber = null
                                 inCareerMode = true
                             }
                             SavedMatchSource.INTERNATIONAL -> {
                                 activeMatchIsInternational = true
                                 activeCareerMatchType = null
+                                activeIplFixtureNumber = null
                                 inInternationalHub = true
                             }
                             SavedMatchSource.IPL_ROOM -> {
                                 activeMatchIsInternational = false
                                 activeCareerMatchType = null
+                                activeIplFixtureNumber = null
                                 snap.roomCode?.let { viewModel.openRoom(it) }
                             }
                         }
@@ -1291,6 +1486,7 @@ private fun CricBidArenaFlow(
                     },
                     resumableRoom = resumableAuctionRoom,
                     activeCareer = careerState.activeCareer,
+                    activeIplSeason = iplSeasonState.season,
                     modifier = contentModifier
                 )
             }
